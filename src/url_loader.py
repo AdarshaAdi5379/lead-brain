@@ -67,6 +67,7 @@ def load_seed_csv(csv_path: Path) -> list[SeedRow]:
 
         normalized_fieldnames = [field.strip().lower() for field in reader.fieldnames]
         reader.fieldnames = normalized_fieldnames
+        _validate_required_columns(set(normalized_fieldnames))
 
         for raw_row in reader:
             row: dict[str, str] = {k.strip().lower(): (v or "") for k, v in raw_row.items() if k}
@@ -89,3 +90,15 @@ def load_seed_csv(csv_path: Path) -> list[SeedRow]:
 
     return seeds
 
+
+def _validate_required_columns(fieldnames: set[str]) -> None:
+    missing: list[str] = []
+    for required, aliases in _COLUMN_ALIASES.items():
+        if not any(alias in fieldnames for alias in aliases):
+            missing.append(required)
+
+    if missing:
+        details = ", ".join(
+            f"{key} (aliases: {', '.join(_COLUMN_ALIASES[key])})" for key in missing
+        )
+        raise ValueError(f"CSV missing required columns: {details}")

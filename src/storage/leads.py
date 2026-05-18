@@ -5,11 +5,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 from src.storage.normalization import normalize_url_for_dedupe
+from urllib.parse import quote
 
 
 @dataclass(frozen=True)
 class LeadUpsert:
     website_url: Optional[str]
+    dedupe_key: Optional[str] = None
     business_name: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -85,10 +87,57 @@ ON CONFLICT(website_url_normalized) DO UPDATE SET
 """
 
 
+def _clean_key_part(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
+def _business_dedupe_key(
+    *,
+    business_name: Optional[str],
+    city: Optional[str],
+    state: Optional[str],
+    category: Optional[str],
+) -> str:
+    """
+    Stable dedupe key for leads with no website URL.
+
+    Format intentionally isn't a real URL; it's just a unique identifier.
+    """
+
+    name = _clean_key_part(business_name)
+    if not name:
+        return ""
+    city_part = _clean_key_part(city)
+    state_part = _clean_key_part(state)
+    category_part = _clean_key_part(category)
+
+    # Quote to keep the key safe/stable even with punctuation.
+    return "biz://" + "|".join(
+        [
+            quote(name, safe=""),
+            quote(city_part, safe=""),
+            quote(state_part, safe=""),
+            quote(category_part, safe=""),
+        ]
+    )
+
+
 def upsert_lead(connection: sqlite3.Connection, lead: LeadUpsert) -> str:
-    website_url_normalized = normalize_url_for_dedupe(lead.website_url)
+    website_url_normalized = (lead.dedupe_key or "").strip()
     if not website_url_normalized:
-        raise ValueError("website_url is required for upsert (after normalization it was empty)")
+        website_url_normalized = normalize_url_for_dedupe(lead.website_url)
+    if not website_url_normalized:
+        website_url_normalized = _business_dedupe_key(
+            business_name=lead.business_name,
+            city=lead.city,
+            state=lead.state,
+            category=lead.category,
+        )
+    if not website_url_normalized:
+        raise ValueError(
+            "Cannot upsert lead without a website URL unless business_name is present "
+            "(used to create a dedupe key)."
+        )
 
     if lead.run_id is not None:
         run_exists = connection.execute(

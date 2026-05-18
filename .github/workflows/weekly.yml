@@ -1,0 +1,61 @@
+name: Weekly lead run
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Every Monday at 02:00 UTC
+    - cron: "0 2 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-lead-run
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      # Set pricing so --max-cost-usd can be enforced.
+      # Update these to your real model prices.
+      OPENAI_INPUT_COST_PER_1K: "0.0"
+      OPENAI_OUTPUT_COST_PER_1K: "0.0"
+      LEAD_SEED_CSV: "business_urls.csv"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: Run pipeline
+        run: |
+          test -f "${LEAD_SEED_CSV}"
+          python -m src.storage.init_db
+          python main.py --input "${LEAD_SEED_CSV}" --limit 200 --min-score-export 30 --log-file auto
+
+      - name: Upload exports
+        uses: actions/upload-artifact@v4
+        with:
+          name: exports
+          path: exports/
+          if-no-files-found: ignore
+
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: logs/
+          if-no-files-found: ignore
+

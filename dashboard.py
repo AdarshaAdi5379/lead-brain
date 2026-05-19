@@ -118,14 +118,47 @@ def main() -> None:
         for r in filtered
     ]
 
+    selected_from_table: Optional[int] = None
     if pd is not None:
         df = pd.DataFrame(table_rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        event = st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+        )
+        try:
+            selected_rows = list(getattr(event, "selection", {}).get("rows", []))
+            if selected_rows:
+                row_index = int(selected_rows[0])
+                selected_from_table = int(df.iloc[row_index]["id"])
+        except Exception:
+            selected_from_table = None
     else:
         st.dataframe(table_rows, use_container_width=True)
 
     st.subheader("Lead detail + outreach draft")
-    selected_id = st.selectbox("Select lead", options=[r.id for r in filtered], format_func=lambda i: _label_for_id(filtered, i))
+    lead_ids = [r.id for r in filtered]
+    if not lead_ids:
+        st.info("No leads match the current filters.")
+        return
+
+    if "selected_lead_id" not in st.session_state:
+        st.session_state["selected_lead_id"] = lead_ids[0]
+    if st.session_state["selected_lead_id"] not in lead_ids:
+        st.session_state["selected_lead_id"] = lead_ids[0]
+    if selected_from_table is not None and selected_from_table in lead_ids:
+        st.session_state["selected_lead_id"] = selected_from_table
+
+    selected_id = st.selectbox(
+        "Select lead",
+        options=lead_ids,
+        index=lead_ids.index(int(st.session_state["selected_lead_id"])),
+        format_func=lambda i: _label_for_id(filtered, i),
+        key="selected_lead_id_selectbox",
+    )
+    st.session_state["selected_lead_id"] = selected_id
     selected = next((r for r in filtered if r.id == selected_id), None)
     if selected is None:
         st.warning("Select a lead to see details.")

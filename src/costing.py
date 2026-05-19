@@ -25,17 +25,35 @@ class PricingConfig:
         return self.input_cost_per_1k > 0.0 or self.output_cost_per_1k > 0.0
 
 
-def pricing_config() -> PricingConfig:
+def pricing_config(*, model: Optional[str] = None) -> PricingConfig:
     """
     Read pricing config from env.
 
-    If unset, returns zeros (disabled).
+    Priority:
+    1) If OPENAI_INPUT_COST_PER_1K / OPENAI_OUTPUT_COST_PER_1K are set, use them.
+    2) Else, if OPENAI_PRICING_PRESET is not "off", try a built-in per-model preset.
+    3) Else, return zeros (disabled).
     """
 
-    return PricingConfig(
-        input_cost_per_1k=_as_float_env("OPENAI_INPUT_COST_PER_1K", default=0.0),
-        output_cost_per_1k=_as_float_env("OPENAI_OUTPUT_COST_PER_1K", default=0.0),
+    input_cost = _as_float_env("OPENAI_INPUT_COST_PER_1K", default=0.0)
+    output_cost = _as_float_env("OPENAI_OUTPUT_COST_PER_1K", default=0.0)
+    if input_cost > 0.0 or output_cost > 0.0:
+        return PricingConfig(input_cost_per_1k=input_cost, output_cost_per_1k=output_cost)
+
+    preset_mode = os.environ.get("OPENAI_PRICING_PRESET", "").strip().lower()
+    if preset_mode == "off":
+        return PricingConfig(input_cost_per_1k=0.0, output_cost_per_1k=0.0)
+
+    resolved_model = (
+        (model or "").strip()
+        or os.environ.get("OPENAI_MODEL_PRIMARY", "").strip()
+        or "gpt-4.1-nano"
     )
+    preset = _pricing_preset_for_model(resolved_model)
+    if preset is not None:
+        return preset
+
+    return PricingConfig(input_cost_per_1k=0.0, output_cost_per_1k=0.0)
 
 
 def estimate_cost(usage: Optional[OpenAIUsage]) -> Optional[CostEstimate]:
@@ -73,3 +91,37 @@ def _as_float_env(name: str, *, default: float) -> float:
         return float(raw)
     except Exception:
         return default
+
+
+def _pricing_preset_for_model(model: str) -> Optional[PricingConfig]:
+    """
+    Returns a best-effort PricingConfig for a known model name.
+
+    Notes:
+    - Values are per-1K tokens, USD.
+    - Matches common snapshot suffixes (e.g. "gpt-4o-mini-2024-07-18").
+    """
+
+    key = (model or "").strip().lower()
+    if not key:
+        return None
+
+    # Normalize common snapshot suffix patterns.
+    if ":" in key:
+        key = key.split(":", 1)[0].strip()
+
+    presets: dict[str, PricingConfig] = {
+        # Prices are based on OpenAI's published per-1M token rates, converted to per-1K.
+        "gpt-4.1": PricingConfig(input_cost_per_1k=0.002, output_cost_per_1k=0.008),
+        "gpt-4.1-mini": PricingConfig(input_cost_per_1k=0.0004, output_cost_per_1k=0.0016),
+        "gpt-4.1-nano": PricingConfig(input_cost_per_1k=0.0001, output_cost_per_1k=0.0004),
+        "gpt-4o-mini": PricingConfig(input_cost_per_1k=0.00015, output_cost_per_1k=0.0006),
+    }
+
+    if key in presets:
+        return presets[key]
+    for prefix, cfg in presets.items():
+        if key.startswith(prefix + "-"):
+            return cfg
+
+    return None

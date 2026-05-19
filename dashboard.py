@@ -9,6 +9,7 @@ from typing import Any, Optional
 import streamlit as st
 
 from src.settings import DB_PATH
+from src.storage.db import init_db
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -46,6 +47,7 @@ class LeadRow:
     extracted_at: Optional[str]
     last_error: Optional[str]
     outreach_sent: bool
+    outreach_sent_at: Optional[str]
     notes: Optional[str]
 
 
@@ -64,6 +66,7 @@ def main() -> None:
     all_rows: list[LeadRow] = []
     total_db_leads = 0
     with _connect(db_path) as connection:
+        init_db(connection)
         all_rows = _fetch_leads(connection)
         total_db_leads = len(all_rows)
 
@@ -114,6 +117,8 @@ def main() -> None:
             "score": r.score,
             "priority": r.priority,
             "platform": r.platform,
+            "outreach_sent": r.outreach_sent,
+            "outreach_sent_at": r.outreach_sent_at,
         }
         for r in filtered
     ]
@@ -121,8 +126,19 @@ def main() -> None:
     selected_from_table: Optional[int] = None
     if pd is not None:
         df = pd.DataFrame(table_rows)
+        display_cols = [
+            "id",
+            "business_name",
+            "phone",
+            "email",
+            "website_url",
+            "score",
+            "priority",
+            "platform",
+        ]
+        display_df = df[[c for c in display_cols if c in df.columns]]
         event = st.dataframe(
-            df,
+            display_df,
             use_container_width=True,
             hide_index=True,
             on_select="rerun",
@@ -132,7 +148,7 @@ def main() -> None:
             selected_rows = list(getattr(event, "selection", {}).get("rows", []))
             if selected_rows:
                 row_index = int(selected_rows[0])
-                selected_from_table = int(df.iloc[row_index]["id"])
+                selected_from_table = int(display_df.iloc[row_index]["id"])
         except Exception:
             selected_from_table = None
     else:
@@ -192,9 +208,21 @@ def main() -> None:
         _write_csv(path, table_rows)
         st.success(f"Wrote {path}")
 
+    if st.button("Export Not Contacted (Current View)"):
+        path = exports_dir / f"dashboard_not_contacted_view_{_ts()}.csv"
+        not_contacted = [r for r in table_rows if not bool(r.get("outreach_sent"))]
+        _write_csv(path, not_contacted)
+        st.success(f"Wrote {path}")
+
     if st.button("Export All Leads"):
         path = exports_dir / f"dashboard_all_{_ts()}.csv"
         _write_csv(path, [_as_dict(r) for r in all_rows])
+        st.success(f"Wrote {path}")
+
+    if st.button("Export Not Contacted (All Leads)"):
+        path = exports_dir / f"dashboard_not_contacted_all_{_ts()}.csv"
+        not_contacted_all = [_as_dict(r) for r in all_rows if not bool(r.outreach_sent)]
+        _write_csv(path, not_contacted_all)
         st.success(f"Wrote {path}")
 
 
@@ -207,7 +235,7 @@ def _fetch_leads(connection: sqlite3.Connection) -> list[LeadRow]:
           city, state, category,
           score, priority, extraction_success,
           extracted_at, last_error,
-          outreach_sent, notes
+          outreach_sent, outreach_sent_at, notes
         FROM leads
         ORDER BY extracted_at DESC
         """
@@ -234,6 +262,7 @@ def _fetch_leads(connection: sqlite3.Connection) -> list[LeadRow]:
                 extracted_at=row["extracted_at"],
                 last_error=row["last_error"],
                 outreach_sent=bool(row["outreach_sent"]),
+                outreach_sent_at=row["outreach_sent_at"],
                 notes=row["notes"],
             )
         )
@@ -321,6 +350,7 @@ def _as_dict(row: LeadRow) -> dict[str, Any]:
         "extracted_at": row.extracted_at,
         "last_error": row.last_error,
         "outreach_sent": row.outreach_sent,
+        "outreach_sent_at": row.outreach_sent_at,
         "notes": row.notes,
     }
 
@@ -349,8 +379,23 @@ def _update_lead_actions(
     notes: str,
 ) -> None:
     connection.execute(
-        "UPDATE leads SET outreach_sent = ?, notes = ? WHERE id = ?",
-        (1 if outreach_sent else 0, (notes or "").strip() or None, int(lead_id)),
+        """
+        UPDATE leads
+        SET
+          outreach_sent = ?,
+          outreach_sent_at = CASE
+            WHEN ? = 1 THEN COALESCE(outreach_sent_at, datetime('now'))
+            ELSE NULL
+          END,
+          notes = ?
+        WHERE id = ?
+        """,
+        (
+            1 if outreach_sent else 0,
+            1 if outreach_sent else 0,
+            (notes or "").strip() or None,
+            int(lead_id),
+        ),
     )
     connection.commit()
 

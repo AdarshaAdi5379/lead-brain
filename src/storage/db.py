@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS leads (
   extracted_at TEXT NOT NULL DEFAULT (datetime('now')),
 
   outreach_sent INTEGER NOT NULL DEFAULT 0,
+  outreach_sent_at TEXT,
   notes TEXT,
 
   last_error TEXT,
@@ -68,5 +69,18 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 def init_db(connection: sqlite3.Connection) -> None:
     connection.executescript(SCHEMA_SQL)
+    _apply_migrations(connection)
     connection.commit()
 
+
+def _apply_migrations(connection: sqlite3.Connection) -> None:
+    """
+    Simple in-place migrations for v1.
+
+    We use CREATE TABLE IF NOT EXISTS for baseline schema, then ALTER TABLE
+    for additive changes when the DB already exists.
+    """
+
+    lead_columns = {r["name"] for r in connection.execute("PRAGMA table_info(leads)").fetchall()}
+    if "outreach_sent_at" not in lead_columns:
+        connection.execute("ALTER TABLE leads ADD COLUMN outreach_sent_at TEXT")

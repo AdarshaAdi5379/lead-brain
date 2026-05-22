@@ -15,6 +15,11 @@ except Exception:  # pragma: no cover
     load_dotenv = None  # type: ignore
 
 from src.costing import estimate_cost, pricing_config
+from src.discovery.discovery import (
+    DiscoveryQuery,
+    discover_to_seeds,
+    load_discovery_queries_csv,
+)
 from src.extraction_schema import validate_extracted_lead
 from src.llm_extraction import extract_lead_from_fetch
 from src.scoring import score_lead
@@ -48,8 +53,86 @@ def main() -> None:
     if load_dotenv is not None:
         load_dotenv()
 
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if args.limit <= 0:
+        raise SystemExit("--limit must be > 0")
+    if args.limit > 1000:
+        raise SystemExit("--limit is capped at 1000 for safety (v1)")
+    if args.max_cost_usd is not None and args.max_cost_usd <= 0:
+        raise SystemExit("--max-cost-usd must be > 0")
+
+    logger = _setup_logging(args.log_file)
+    logger.info("Starting run")
+
+    if args.discover:
+        queries = _resolve_discovery_queries(args)
+        logger.info("Discovery queries: %d", len(queries))
+        for q in queries:
+            logger.info("  Discover: %s in %s", q.category, q.location)
+
+        discovered_seeds = discover_to_seeds(queries)[: max(0, int(args.limit))]
+        logger.info("Discovered seeds: %d", len(discovered_seeds))
+
+        _process_seeds_through_pipeline(
+            connection=connect(DB_PATH),
+            logger=logger,
+            seeds=discovered_seeds,
+            args=args,
+        )
+    elif args.only_failed:
+        connection = connect(DB_PATH)
+        try:
+            init_db(connection)
+            seeds = _load_failed_seeds_from_db(connection, limit=int(args.limit))
+            logger.info("Failed leads loaded from DB: %d", len(seeds))
+            _run_pipeline(connection, logger, seeds, args)
+        finally:
+            connection.close()
+    else:
+        if not args.input:
+            raise SystemExit("--input is required in CSV mode (or use --discover)")
+        input_path = Path(args.input)
+        logger.info("Seed CSV: %s", input_path)
+        connection = connect(DB_PATH)
+        try:
+            init_db(connection)
+            seeds = load_seed_csv(input_path)[: max(0, int(args.limit))]
+            logger.info("Seed rows (after limit): %d", len(seeds))
+            _run_pipeline(connection, logger, seeds, args)
+        finally:
+            connection.close()
+
+    logger.info("Run complete.")
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Second Brain Lead Finder (v1)")
-    parser.add_argument("--input", required=True, help="Seed CSV path")
+
+    discovery_group = parser.add_argument_group("discovery mode")
+    discovery_group.add_argument(
+        "--discover",
+        action="store_true",
+        help="Enable Google Places discovery mode (discover leads automatically)",
+    )
+    discovery_group.add_argument(
+        "--discover-queries",
+        default=None,
+        help="CSV file with discovery queries (columns: category, location)",
+    )
+    discovery_group.add_argument(
+        "--category",
+        default=None,
+        help="Business category for inline discovery (e.g. 'plumber')",
+    )
+    discovery_group.add_argument(
+        "--location",
+        default=None,
+        help="Location for inline discovery (e.g. 'Austin, TX')",
+    )
+
+    parser.add_argument("--input", default=None, help="Seed CSV path")
     parser.add_argument("--min-score-export", type=int, default=30)
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--max-cost-usd", type=float, default=None)
@@ -63,21 +146,10 @@ def main() -> None:
         default="auto",
         help="Log file path, 'auto' for logs/run_<timestamp>.log, or 'none' to disable",
     )
-    args = parser.parse_args()
+    return parser
 
-    if args.limit <= 0:
-        raise SystemExit("--limit must be > 0")
-    if args.limit > 1000:
-        raise SystemExit("--limit is capped at 1000 for safety (v1)")
-    if args.max_cost_usd is not None and args.max_cost_usd <= 0:
-        raise SystemExit("--max-cost-usd must be > 0")
 
-    input_path = Path(args.input)
-    logger = _setup_logging(args.log_file)
-    logger.info("Starting run")
-    logger.info("Seed CSV: %s", input_path)
-    logger.info("Mode: %s", "only-failed" if args.only_failed else "csv")
-
+def _run_pipeline(connection, logger, seeds: list[SeedRow], args) -> None:
     if args.max_cost_usd is not None:
         pricing = pricing_config()
         if not pricing.enabled:
@@ -92,32 +164,28 @@ def main() -> None:
             pricing.output_cost_per_1k,
         )
 
-    connection = connect(DB_PATH)
+    run_id = start_run(connection)
+    stats = _run_seeds(
+        connection,
+        logger,
+        run_id,
+        seeds,
+        max_cost_usd=args.max_cost_usd,
+    )
+    update_run_stats(connection, run_id, stats)
+    complete_run(connection, run_id)
+    export_path = _export_csv_for_run(
+        connection,
+        run_id=run_id,
+        min_score=args.min_score_export,
+    )
+    logger.info("Run %s complete. Export: %s", run_id, export_path)
+
+
+def _process_seeds_through_pipeline(connection, logger, seeds, args) -> None:
     try:
         init_db(connection)
-        if args.only_failed:
-            seeds = _load_failed_seeds_from_db(connection, limit=int(args.limit))
-            logger.info("Failed leads loaded from DB: %d", len(seeds))
-        else:
-            seeds = load_seed_csv(input_path)[: max(0, int(args.limit))]
-            logger.info("Seed rows (after limit): %d", len(seeds))
-
-        run_id = start_run(connection)
-        stats = _run_seeds(
-            connection,
-            logger,
-            run_id,
-            seeds,
-            max_cost_usd=args.max_cost_usd,
-        )
-        update_run_stats(connection, run_id, stats)
-        complete_run(connection, run_id)
-        export_path = _export_csv_for_run(
-            connection,
-            run_id=run_id,
-            min_score=args.min_score_export,
-        )
-        logger.info("Run %s complete. Export: %s", run_id, export_path)
+        _run_pipeline(connection, logger, seeds, args)
     finally:
         connection.close()
 
@@ -389,6 +457,18 @@ def _load_failed_seeds_from_db(connection, *, limit: int) -> list[SeedRow]:
             )
         )
     return seeds
+
+
+def _resolve_discovery_queries(args) -> list[DiscoveryQuery]:
+    if args.discover_queries:
+        path = Path(args.discover_queries)
+        return load_discovery_queries_csv(path)
+    if args.category and args.location:
+        return [DiscoveryQuery(category=args.category, location=args.location)]
+    raise SystemExit(
+        "Discovery mode requires either --discover-queries <csv> or "
+        "--category <cat> --location <loc>."
+    )
 
 
 def _setup_logging(log_file: str) -> logging.Logger:

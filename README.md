@@ -52,6 +52,20 @@ python main.py --input business_urls.csv --max-cost-usd 5
 streamlit run dashboard.py
 ```
 
+## Discovery mode (Google Places API)
+
+Discover leads automatically without a seed CSV:
+
+```bash
+# Inline: single query
+python main.py --discover --category plumber --location "Austin, TX" --limit 50
+
+# Batch: CSV of queries (columns: category, location)
+python main.py --discover --discover-queries queries.csv --limit 200
+```
+
+Set `GOOGLE_MAPS_API_KEY` in `.env` (get a key from Google Cloud Console).
+
 ## Tests
 
 ```bash

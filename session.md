@@ -1,5 +1,5 @@
 Session Notes — lead-brain
-Last updated: 2026-05-18 (Asia/Kolkata)
+Last updated: 2026-05-19 (Asia/Kolkata)
 
 Repo
 - GitHub: `AdarshaAdi5379/lead-brain`
@@ -67,9 +67,10 @@ Phase 4 — Orchestration (completed)
 Phase 5 — Dashboard (completed)
 - Streamlit dashboard: `dashboard.py`
   - Filters + table + metrics + histogram
+  - Table click-to-select lead plus fallback selector
   - Lead detail + outreach draft
-  - Actions: mark `outreach_sent`, edit `notes`
-  - Exports: “current view” + “all leads” to `exports/`
+  - Actions: mark `outreach_sent`, capture `outreach_sent_at`, edit `notes`
+  - Exports: “current view”, “all leads”, and “not contacted” CSVs to `exports/`
 
 Phase 6 — Scheduling (completed)
 - Cron example: `scripts/run_weekly.sh`
@@ -79,6 +80,10 @@ Phase 7 — Hardening + Tests (completed)
 - CSV header validation (required columns/aliases): `src/url_loader.py`
 - Upsert/dedupe test coverage: `tests/test_upsert_dedupe.py`
 - URL loader validation tests: `tests/test_url_loader_validation.py`
+- DB migration test coverage: `tests/test_db_migrations.py`
+- Pricing presets for OpenAI models: `src/costing.py`
+  - Built-in pricing for `gpt-4.1-nano`, `gpt-4o-mini`, `gpt-4.1-mini`, `gpt-4.1`
+  - Manual override still supported via `OPENAI_INPUT_COST_PER_1K` / `OPENAI_OUTPUT_COST_PER_1K`
 
 How to run quick checks
 - Initialize DB: `python -m src.storage.init_db`
@@ -86,7 +91,17 @@ How to run quick checks
 - Run pipeline: `python main.py --input business_urls.csv --limit 200 --min-score-export 30`
 - Run dashboard: `streamlit run dashboard.py`
 
-Remaining nice-to-haves
-- Pricing presets per model (avoid manual env price config).
-- Dashboard: table click-to-select lead (instead of dropdown).
-- Outreach workflow: sent timestamp + “not contacted” exports.
+Phase 8 — Google Places API lead discovery (completed)
+- Discovery config: `src/settings.py` adds `GOOGLE_MAPS_API_KEY`, `PLACES_TEXT_SEARCH_RADIUS`, `PLACES_LANGUAGE`
+- Places API client: `src/discovery/places.py` — `text_search()` + `place_details()` via stdlib urllib
+- Discovery orchestration: `src/discovery/discovery.py` — `discover_to_seeds()` + `discover_leads()` + CSV query loader
+- Pipeline integration: `main.py` `--discover` mode (inline `--category --location` or batch `--discover-queries <csv>`)
+- Tests: `tests/test_discovery.py` (9 tests covering text search, details, dedupe, min-rating filter, CSV parsing, error handling)
+- Usage:
+  - Inline: `python main.py --discover --category plumber --location "Austin, TX" --limit 50`
+  - Batch CSV: `python main.py --discover --discover-queries queries.csv --limit 200`
+
+Remaining nice-to-haves (Phase 9+)
+- Discovery UX: choose city/category query inputs for Google Places.
+- Discovery persistence: write discovered leads directly to CSV or SQLite.
+- Discovery validation: test empty-result handling and place/website dedupe.

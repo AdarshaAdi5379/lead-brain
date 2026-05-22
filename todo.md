@@ -16,6 +16,7 @@ Progress (implemented)
 - ✅ Phase 5 (Dashboard): Steps 5.1–5.4 completed
 - ✅ Phase 6 (Scheduling): Step 6.1 completed
 - ✅ Phase 7 (Hardening/Tests): Steps 7.1–7.2 completed
+- ✅ Phase 8 (Lead Discovery via Google Places API): Steps 8.1–8.6 completed
 
 ---
 
@@ -307,6 +308,104 @@ Done when
 - `python -m unittest` (or pytest) passes locally.
 Notes (implemented)
 - Added tests for URL loader validation and upsert/dedupe (`tests/test_url_loader_validation.py`, `tests/test_upsert_dedupe.py`)
+
+---
+
+PHASE 8 — Lead Discovery (Google Places API)
+
+Goal
+- Add an automatic lead-discovery step so the app can find businesses, names, websites, and contact details without manual CSV entry.
+- Use the Google Places API key as the discovery source, then feed discovered websites into the existing scrape → extract → score pipeline.
+
+Step 8.1 — Add discovery configuration
+Tasks
+- Add env settings for Google Places:
+  - `GOOGLE_MAPS_API_KEY`
+  - optional `GOOGLE_PLACES_TEXT_SEARCH_RADIUS`
+  - optional `GOOGLE_PLACES_LANGUAGE`
+- Decide discovery input format:
+  - city + category
+  - keyword + location
+  - or a batch CSV of discovery queries
+Done when
+- The app can read Google Places credentials from `.env` and has a clear discovery mode configuration.
+Status
+- ✅ Done
+- Code: `src/settings.py` (GOOGLE_MAPS_API_KEY, PLACES_TEXT_SEARCH_RADIUS, PLACES_LANGUAGE)
+
+Step 8.2 — Query Google Places for candidates
+Tasks
+- Search for businesses by category and location.
+- Collect structured fields from the search response:
+  - business name
+  - place id
+  - address
+  - phone if available
+  - rating / review count if available
+  - website URL if available
+- Keep raw Google result metadata for traceability.
+Done when
+- A discovery run returns a list of candidate businesses for one city/category query.
+Status
+- ✅ Done
+- Code: `src/discovery/places.py` (`text_search` + `place_details`)
+
+Step 8.3 — Fetch place details and websites
+Tasks
+- For each discovered place:
+  - fetch place details
+  - extract the website URL
+  - keep phone/address/location fields
+- Normalize URLs before handing them to the website scraper.
+- Skip or flag entries that do not have a website.
+Done when
+- Discovered businesses include website URLs whenever Google provides them.
+Status
+- ✅ Done
+- Code: `src/discovery/places.py` (place_details with website field)
+
+Step 8.4 — Convert discovery results into seed leads
+Tasks
+- Transform Google results into the same seed structure the existing pipeline expects.
+- Option A: write discovered rows to a CSV for the current pipeline.
+- Option B: insert discovered rows directly into SQLite and let the pipeline process them.
+- Preserve de-duplication using normalized website URL.
+Done when
+- Discovered rows can enter the existing scrape/extract/score flow without manual copying.
+Status
+- ✅ Done
+- Code: `src/discovery/discovery.py` (`discover_to_seeds`, `discover_leads`)
+
+Step 8.5 — Add discovery-driven run mode
+Tasks
+- Add a new mode for:
+  - `city + category` discovery
+  - `category + region` discovery
+- Keep the existing manual CSV pipeline working.
+- Make discovery mode produce:
+  - discovered businesses
+  - exported seed CSV or DB rows
+  - downstream lead scores
+Done when
+- You can run one command to discover new leads and process them end-to-end.
+Status
+- ✅ Done
+- Code: `main.py` (`--discover`, `--category`, `--location`, `--discover-queries`)
+
+Step 8.6 — Add tests and validation
+Tasks
+- Validate API errors and empty results cleanly.
+- Test URL normalization and dedupe for discovered leads.
+- Test the discovery-to-seed conversion format.
+Done when
+- Discovery mode fails clearly on bad input and passes basic automated tests.
+Status
+- ✅ Done
+- Tests: `tests/test_discovery.py` (9 tests)
+
+Notes
+- This feature should be treated as a new lead source, not a replacement for the existing extraction pipeline.
+- Google Places is the recommended discovery source because it is more structured and reliable than scraping Google Maps pages directly.
 
 ---
 

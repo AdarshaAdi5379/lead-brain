@@ -190,6 +190,59 @@ def _process_seeds_through_pipeline(connection, logger, seeds, args) -> None:
         connection.close()
 
 
+def run_discovery_pipeline(
+    *,
+    category: str,
+    location: str,
+    limit: int = 50,
+    max_cost_usd: Optional[float] = None,
+    min_score_export: int = 30,
+) -> dict[str, Any]:
+    """
+    Run discovery + scrape + extract + score pipeline inline.
+    Returns summary stats.
+    """
+    logger = logging.getLogger("lead.dashboard")
+
+    queries = [DiscoveryQuery(category=category, location=location)]
+    discovered_seeds = discover_to_seeds(queries)[:max(0, limit)]
+    logger.info("Discovered %d seeds from Google Places", len(discovered_seeds))
+
+    if not discovered_seeds:
+        return {"total": 0, "ok": 0, "failed": 0, "cost": 0.0, "seeds": 0}
+
+    connection = connect(DB_PATH)
+    try:
+        init_db(connection)
+        run_id = start_run(connection)
+        stats = _run_seeds(
+            connection,
+            logger,
+            run_id,
+            discovered_seeds,
+            max_cost_usd=max_cost_usd,
+        )
+        update_run_stats(connection, run_id, stats)
+        complete_run(connection, run_id)
+        export_path = _export_csv_for_run(
+            connection,
+            run_id=run_id,
+            min_score=min_score_export,
+        )
+        logger.info("Discovery run %s complete. Export: %s", run_id, export_path)
+        return {
+            "total": stats.total_urls_processed,
+            "ok": stats.successful_extractions,
+            "failed": stats.failed_extractions,
+            "cost": stats.total_cost_usd,
+            "seeds": len(discovered_seeds),
+            "run_id": run_id,
+            "export": str(export_path),
+        }
+    finally:
+        connection.close()
+
+
 def _run_seeds(
     connection,
     logger: logging.Logger,

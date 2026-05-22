@@ -59,8 +59,11 @@ def main() -> None:
     st.title("Second Brain Lead Finder — Dashboard (v1)")
 
     db_path = DB_PATH
+
+    _render_discover_section(db_path)
+
     if not db_path.exists():
-        st.error(f"Database not found at {db_path}. Run `python -m src.storage.init_db` and `python main.py ...` first.")
+        st.info("Database not initialized. Run a discovery search above to create it.")
         return
 
     all_rows: list[LeadRow] = []
@@ -71,7 +74,7 @@ def main() -> None:
         total_db_leads = len(all_rows)
 
     if not all_rows:
-        st.info("No leads found yet. Run the pipeline to populate the database.")
+        st.info("No leads found yet. Use the discovery panel in the sidebar to find new leads.")
         return
 
     min_score = int(st.sidebar.slider("Min score", 0, 100, 30))
@@ -366,6 +369,7 @@ def _ts() -> str:
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
     return connection
@@ -398,6 +402,96 @@ def _update_lead_actions(
         ),
     )
     connection.commit()
+
+
+def _render_discover_section(db_path: Path) -> None:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Discover New Leads")
+    st.sidebar.caption("Automatically find businesses via Google Places, then scrape and score them.")
+
+    category = st.sidebar.text_input(
+        "Business category",
+        placeholder="plumber, electrician, salon...",
+        key="disc_category",
+    )
+    location = st.sidebar.text_input(
+        "Location",
+        placeholder="Austin, TX",
+        key="disc_location",
+    )
+    max_leads = st.sidebar.number_input(
+        "Max leads", min_value=5, max_value=200, value=50, step=5, key="disc_max",
+    )
+
+    if st.sidebar.button("Run Discovery", type="primary", key="disc_btn"):
+        if not category or not location:
+            st.sidebar.error("Both category and location are required.")
+            return
+
+        has_key = _check_google_places_key()
+        if not has_key:
+            st.sidebar.error(
+                "GOOGLE_MAPS_API_KEY is not set. Add it to your .env file."
+            )
+            return
+
+        status_placeholder = st.sidebar.status(
+            f"Discovering {category} in {location}...", state="running"
+        )
+
+        try:
+            status_placeholder.write("Querying Google Places...")
+            st.session_state["disc_run_started"] = True
+
+            from main import run_discovery_pipeline
+
+            result = run_discovery_pipeline(
+                category=category,
+                location=location,
+                limit=int(max_leads),
+                min_score_export=30,
+            )
+
+            total = result["total"]
+            ok = result["ok"]
+            seeds = result["seeds"]
+
+            if seeds == 0:
+                status_placeholder.update(
+                    label=f"No businesses found for '{category}' in '{location}'.",
+                    state="error",
+                )
+                return
+
+            status_placeholder.update(
+                label=f"Discovery complete: {seeds} found, {total} processed, {ok} succeeded.",
+                state="complete",
+            )
+            if result.get("export"):
+                status_placeholder.write(f"Export saved to {result['export']}")
+
+            st.session_state["disc_last_run"] = result
+            st.rerun()
+        except Exception as exc:
+            status_placeholder.update(
+                label=f"Discovery failed: {exc}",
+                state="error",
+            )
+
+    last_run = st.session_state.get("disc_last_run")
+    if last_run:
+        st.sidebar.markdown("**Last discovery run**")
+        st.sidebar.markdown(
+            f"- {last_run['seeds']} businesses found"
+            f"\n- {last_run['total']} processed"
+            f"\n- {last_run['ok']} succeeded"
+            f"\n- {last_run['failed']} failed"
+        )
+
+
+def _check_google_places_key() -> bool:
+    from src.settings import GOOGLE_MAPS_API_KEY
+    return bool(GOOGLE_MAPS_API_KEY)
 
 
 if __name__ == "__main__":

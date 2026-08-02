@@ -152,6 +152,32 @@ CREATE INDEX IF NOT EXISTS ix_seo_page_audits_audit_id
 
 CREATE INDEX IF NOT EXISTS ix_seo_page_audits_noindex
   ON seo_page_audits(noindex);
+
+CREATE TABLE IF NOT EXISTS lead_scores (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL,
+  final_score INTEGER NOT NULL,
+  priority_label TEXT NOT NULL,
+  discovery_quality_score INTEGER NOT NULL DEFAULT 0,
+  contactability_score INTEGER NOT NULL DEFAULT 0,
+  technical_health_score INTEGER NOT NULL DEFAULT 0,
+  seo_health_score INTEGER NOT NULL DEFAULT 0,
+  content_strength_score INTEGER NOT NULL DEFAULT 0,
+  trust_professionalism_score INTEGER NOT NULL DEFAULT 0,
+  outreach_potential_score INTEGER NOT NULL DEFAULT 0,
+  dimension_reasons_json TEXT NOT NULL DEFAULT '{}',
+  top_positive_reasons_json TEXT NOT NULL DEFAULT '[]',
+  top_negative_reasons_json TEXT NOT NULL DEFAULT '[]',
+  recommended_outreach_angle TEXT NOT NULL DEFAULT '',
+  scored_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_lead_scores_lead_id
+  ON lead_scores(lead_id);
+
+CREATE INDEX IF NOT EXISTS ix_lead_scores_final_score
+  ON lead_scores(final_score);
 """
 
 

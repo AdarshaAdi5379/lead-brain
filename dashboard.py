@@ -10,6 +10,7 @@ import streamlit as st
 
 from src.settings import DB_PATH
 from src.storage.db import init_db
+from src.storage.scores import scores_by_lead as lead_scores_by_lead
 from src.storage.seo import audits_by_lead as seo_audits_by_lead
 from src.storage.seo import page_audits_for_audit
 from src.storage.technologies import detections_by_lead
@@ -73,12 +74,14 @@ def main() -> None:
     total_db_leads = 0
     tech_by_lead: dict[int, list[dict[str, Any]]] = {}
     seo_by_lead: dict[int, dict[str, Any]] = {}
+    score_by_lead: dict[int, dict[str, Any]] = {}
     with _connect(db_path) as connection:
         init_db(connection)
         all_rows = _fetch_leads(connection)
         total_db_leads = len(all_rows)
         tech_by_lead = detections_by_lead(connection)
         seo_by_lead = seo_audits_by_lead(connection)
+        score_by_lead = lead_scores_by_lead(connection)
 
     if not all_rows:
         st.info("No leads found yet. Use the discovery panel in the sidebar to find new leads.")
@@ -90,6 +93,12 @@ def main() -> None:
         "Priority",
         options=["Hot", "Warm", "Cold", "Avoid"],
         default=["Hot", "Warm", "Cold"],
+    )
+    sort_by = st.sidebar.selectbox(
+        "Sort by",
+        options=["Final score (high to low)", "Legacy score", "Most recent"],
+        index=0,
+        key="scoring_sort",
     )
 
     tech_filter = st.sidebar.multiselect(
@@ -108,6 +117,15 @@ def main() -> None:
         }.get(c, c),
         key="tech_category_filter",
     )
+
+    st.sidebar.subheader("Scoring filters")
+    priority_label_filter = st.sidebar.multiselect(
+        "Priority label",
+        options=["Hot", "Warm", "Cold", "Avoid"],
+        default=[],
+        key="priority_label_filter",
+    )
+    min_final_score = int(st.sidebar.slider("Min final score", 0, 100, 0, key="min_final_score"))
 
     st.sidebar.subheader("SEO filters")
     seo_health_filter = st.sidebar.multiselect(
@@ -150,6 +168,19 @@ def main() -> None:
             return False
         return True
 
+    def _lead_label_and_score(lead_id: int) -> tuple[str, int]:
+        score_row = score_by_lead.get(lead_id)
+        if score_row:
+            return (
+                str(score_row.get("priority_label") or "Unknown"),
+                int(score_row.get("final_score") or 0),
+            )
+        lead_row = next((r for r in all_rows if r.id == lead_id), None)
+        return (
+            str(lead_row.priority or "Unknown") if lead_row else "Unknown",
+            int(lead_row.score or 0) if lead_row else 0,
+        )
+
     filtered = [
         row
         for row in all_rows
@@ -158,15 +189,28 @@ def main() -> None:
         and _has_tech(row.id, tech_filter)
         and _has_seo(row.id)
     ]
+    if priority_label_filter:
+        filtered = [row for row in filtered if _lead_label_and_score(row.id)[0] in set(priority_label_filter)]
+    if min_final_score > 0:
+        filtered = [row for row in filtered if _lead_label_and_score(row.id)[1] >= min_final_score]
+
+    if sort_by == "Most recent":
+        filtered = sorted(filtered, key=lambda r: r.extracted_at or "", reverse=True)
+    elif sort_by == "Legacy score":
+        filtered = sorted(filtered, key=lambda r: r.score or 0, reverse=True)
+    else:
+        filtered = sorted(filtered, key=lambda r: _lead_label_and_score(r.id)[1], reverse=True)
     filtered = filtered[:max_rows]
 
     st.subheader("Metrics")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.metric("Leads in view", str(len(filtered)))
-    col2.metric("Hot in view", str(sum(1 for r in filtered if r.priority == "Hot")))
-    avg_score = _avg([r.score for r in filtered if r.score is not None])
-    col3.metric("Avg score (view)", f"{avg_score:.1f}" if avg_score is not None else "—")
-    col4.metric("Total leads (DB)", str(total_db_leads))
+    col2.metric("Hot in view", str(sum(1 for r in filtered if _lead_label_and_score(r.id)[0] == "Hot")))
+    col3.metric("Warm in view", str(sum(1 for r in filtered if _lead_label_and_score(r.id)[0] == "Warm")))
+    col4.metric("Cold in view", str(sum(1 for r in filtered if _lead_label_and_score(r.id)[0] == "Cold")))
+    avg_final = _avg([_lead_label_and_score(r.id)[1] for r in filtered])
+    col5.metric("Avg final score", f"{avg_final:.1f}" if avg_final is not None else "—")
+    col6.metric("Total leads (DB)", str(total_db_leads))
 
     st.subheader("Score distribution")
     scores = [r.score for r in filtered if r.score is not None]
@@ -201,6 +245,8 @@ def main() -> None:
             "website_url": r.website_url,
             "score": r.score,
             "priority": r.priority,
+            "final_score": _lead_label_and_score(r.id)[1],
+            "priority_label": _lead_label_and_score(r.id)[0],
             "platform": r.platform,
             "technologies": ", ".join(
                 str(d.get("technology_name"))
@@ -223,6 +269,8 @@ def main() -> None:
             "phone",
             "email",
             "website_url",
+            "final_score",
+            "priority_label",
             "score",
             "priority",
             "platform",
@@ -292,6 +340,8 @@ def main() -> None:
                 st.markdown(f"- **{d.get('technology_name')}** — {percent}% ({d.get('category')})")
         else:
             st.caption("No technology detections stored for this lead.")
+
+        _render_scoring_section(score_by_lead.get(selected.id))
 
         _render_seo_section(db_path, selected.id, seo_by_lead, page_issue_filters)
 
@@ -381,6 +431,63 @@ def _label_for_id(rows: list[LeadRow], lead_id: int) -> str:
     name = row.business_name or "(no name)"
     score = row.score if row.score is not None else "—"
     return f"{name} — {score} ({row.priority or '—'})"
+
+
+def _render_scoring_section(score_row: Optional[dict[str, Any]]) -> None:
+    st.markdown("### Lead score (deterministic)")
+    if not score_row:
+        st.caption("No multi-dimensional score stored for this lead.")
+        return
+
+    col_score, col_label = st.columns(2)
+    col_score.metric("Final score", f"{int(score_row.get('final_score') or 0)}/100")
+    col_label.metric("Priority", str(score_row.get("priority_label") or "—"))
+
+    st.markdown("**Dimension breakdown**")
+    dimension_scores: list[tuple[str, str, int]] = [
+        ("Contactability", "contactability_score", int(score_row.get("contactability_score") or 0)),
+        ("Technical health", "technical_health_score", int(score_row.get("technical_health_score") or 0)),
+        ("SEO health", "seo_health_score", int(score_row.get("seo_health_score") or 0)),
+        ("Content strength", "content_strength_score", int(score_row.get("content_strength_score") or 0)),
+        ("Trust / professionalism", "trust_professionalism_score", int(score_row.get("trust_professionalism_score") or 0)),
+        ("Discovery quality", "discovery_quality_score", int(score_row.get("discovery_quality_score") or 0)),
+        ("Outreach potential", "outreach_potential_score", int(score_row.get("outreach_potential_score") or 0)),
+    ]
+    for label, _, value in dimension_scores:
+        st.progress(value / 100.0, text=f"{label}: {value}/100")
+
+    st.markdown("**Why this lead is ranked here**")
+    positives = score_row.get("top_positive_reasons") or []
+    negatives = score_row.get("top_negative_reasons") or []
+    strongest_positive = positives[0] if positives else "no positive signals"
+    strongest_negative = negatives[0] if negatives else "no negative signals"
+    st.write(
+        f"Ranks {score_row.get('priority_label')} at {score_row.get('final_score')}/100. "
+        f"Strongest positive: {strongest_positive}. Strongest negative: {strongest_negative}."
+    )
+
+    if positives:
+        st.markdown("**Top positive reasons**")
+        for reason in positives[:5]:
+            st.markdown(f"- {reason}")
+    if negatives:
+        st.markdown("**Top negative reasons**")
+        for reason in negatives[:5]:
+            st.markdown(f"- {reason}")
+
+    reasons_by_dimension = score_row.get("dimension_reasons") or {}
+    if reasons_by_dimension:
+        st.markdown("**Per-dimension explanations**")
+        for dimension, reasons in reasons_by_dimension.items():
+            label = dimension.replace("_", " ").title()
+            with st.expander(f"{label}"):
+                for reason in reasons:
+                    st.markdown(f"- {reason}")
+
+    angle = score_row.get("recommended_outreach_angle")
+    if angle:
+        st.markdown("**Recommended outreach angle**")
+        st.info(str(angle))
 
 
 def _render_seo_section(

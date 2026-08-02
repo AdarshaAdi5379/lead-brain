@@ -146,3 +146,48 @@ class TestDbMigrations(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_init_db_creates_lead_scores_table(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        try:
+            init_db(connection)
+            tables = {
+                r["name"]
+                for r in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            self.assertIn("lead_scores", tables)
+
+            cols = {
+                r["name"]
+                for r in connection.execute("PRAGMA table_info(lead_scores)").fetchall()
+            }
+            for column in (
+                "lead_id",
+                "final_score",
+                "priority_label",
+                "discovery_quality_score",
+                "contactability_score",
+                "technical_health_score",
+                "seo_health_score",
+                "content_strength_score",
+                "trust_professionalism_score",
+                "outreach_potential_score",
+                "dimension_reasons_json",
+                "top_positive_reasons_json",
+                "top_negative_reasons_json",
+                "recommended_outreach_angle",
+            ):
+                self.assertIn(column, cols, f"missing column: {column}")
+
+            indexes = {
+                r["name"]
+                for r in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+            self.assertIn("ux_lead_scores_lead_id", indexes)
+        finally:
+            connection.close()
+

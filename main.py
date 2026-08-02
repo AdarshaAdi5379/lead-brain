@@ -27,7 +27,8 @@ from src.fingerprinting.base import PLATFORM_FROM_TECHNOLOGY, Detection
 from src.fingerprinting.detector import FingerprintResult, TechnologyDetector, build_site_evidence
 from src.fingerprinting.report import summary_csv_fields
 from src.llm_extraction import extract_lead_from_fetch, extract_lead_from_merged_content
-from src.scoring import score_lead
+from src.scoring import ScoringInputs, score_lead, score_site_lead
+from src.scoring.report import csv_fields_from_row as score_csv_fields_from_row
 from src.scraping.focused_crawler import CrawlResult, FocusedCrawler
 from src.scraping.page_cache import PageCache
 from src.seo.report import csv_fields_from_row, to_llm_text
@@ -44,6 +45,8 @@ from src.storage.db import connect, init_db
 from src.storage.leads import LeadUpsert, upsert_lead
 from src.storage.normalization import normalize_url_for_dedupe
 from src.storage.runs import RunStats, complete_run, start_run, update_run_stats
+from src.storage.scores import replace_score as replace_lead_score
+from src.storage.scores import scores_for_run as lead_scores_for_run
 from src.storage.seo import audits_for_run as seo_audits_for_run
 from src.storage.seo import replace_audit as replace_seo_audit
 from src.storage.technologies import detections_for_run, get_lead_id_by_url, replace_detections
@@ -80,6 +83,18 @@ EXPORT_COLUMNS = [
     "pages_with_thin_content",
     "pages_with_duplicate_titles",
     "pages_with_images_missing_alt",
+    "final_score",
+    "priority_label",
+    "discovery_quality_score",
+    "contactability_score",
+    "technical_health_score",
+    "seo_health_score",
+    "content_strength_score",
+    "trust_professionalism_score",
+    "outreach_potential_score",
+    "top_positive_reasons",
+    "top_negative_reasons",
+    "recommended_outreach_angle",
 ]
 
 
@@ -432,11 +447,42 @@ def _run_seeds(
                 if platform_override:
                     extracted["platform"] = platform_override
 
-                score = score_lead(
-                    extracted,
-                    site_seo_score=seo_audit.site_score if seo_audit is not None else None,
-                    seo_blend_weight=SEO_BLEND_WEIGHT,
-                )
+                # Deterministic multi-dimensional scoring. Pure local logic
+                # over already-collected signals; the LLM never scores leads.
+                lead_score = None
+                try:
+                    lead_score = score_site_lead(
+                        ScoringInputs(
+                            extracted=extracted,
+                            business_name=extracted.get("business_name") or seed.business_name or None,
+                            category=seed.category or None,
+                            city=seed.city or None,
+                            state=seed.state or None,
+                            address=seed.address or None,
+                            source=seed.source or None,
+                            osm_id=seed.osm_id or None,
+                            website_url=seed.url or None,
+                            fetch_ok=fetch.success,
+                            last_error=extracted.get("last_error"),
+                            detections=(
+                                [d.to_dict() for d in fingerprint.detections]
+                                if fingerprint and fingerprint.detections
+                                else None
+                            ),
+                            crawl=_crawl_summary(crawl),
+                            seo_audit=seo_audit.to_dict() if seo_audit is not None else None,
+                        )
+                    )
+                    logger.info(
+                        "Scored %s: %d/100 (%s)",
+                        seed.url,
+                        lead_score.final_score,
+                        lead_score.priority_label,
+                    )
+                except Exception as exc:  # scoring must never break the pipeline
+                    logger.debug("Scoring failed for %s: %s", seed.url, exc)
+                    fallback = score_lead(extracted, site_seo_score=seo_audit.site_score if seo_audit is not None else None, seo_blend_weight=SEO_BLEND_WEIGHT)
+                    lead_score = _fallback_lead_score(fallback)
 
                 lead = LeadUpsert(
                     website_url=seed.url,
@@ -449,8 +495,8 @@ def _run_seeds(
                     city=seed.city or None,
                     state=seed.state or None,
                     category=seed.category or None,
-                    score=score.score,
-                    priority=score.priority,
+                    score=lead_score.final_score,
+                    priority=lead_score.priority_label,
                     extraction_success=bool(extracted.get("extraction_success")),
                     last_error=extracted.get("last_error"),
                     run_id=run_id,
@@ -490,6 +536,15 @@ def _run_seeds(
                             replace_seo_audit(connection, lead_id, site_dict, page_dicts)
                     except Exception as exc:
                         logger.debug("Could not persist SEO audit for %s: %s", seed.url, exc)
+
+                if lead_score is not None:
+                    try:
+                        normalized = normalize_url_for_dedupe(seed.url) if seed.url else ""
+                        lead_id = get_lead_id_by_url(connection, normalized) if normalized else None
+                        if lead_id is not None:
+                            replace_lead_score(connection, lead_id, lead_score)
+                    except Exception as exc:
+                        logger.debug("Could not persist score for %s: %s", seed.url, exc)
 
                 usage = extracted.get("_usage")
                 cost = estimate_cost(usage) if usage is not None else None
@@ -607,7 +662,21 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
             "last_error": "No website URL provided",
         }
     ).to_dict()
-    score = score_lead(extracted)
+
+    lead_score = score_site_lead(
+        ScoringInputs(
+            extracted=extracted,
+            business_name=seed.business_name or None,
+            category=seed.category or None,
+            city=seed.city or None,
+            state=seed.state or None,
+            address=seed.address or None,
+            source=seed.source or None,
+            osm_id=seed.osm_id or None,
+            website_url=None,
+            fetch_ok=False,
+        )
+    )
 
     lead = LeadUpsert(
         website_url=None,
@@ -620,8 +689,8 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
         city=seed.city or None,
         state=seed.state or None,
         category=seed.category or None,
-        score=score.score,
-        priority=score.priority,
+        score=lead_score.final_score,
+        priority=lead_score.priority_label,
         extraction_success=False,
         last_error=extracted.get("last_error"),
         run_id=run_id,
@@ -635,7 +704,49 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
         country=seed.country,
     )
 
-    upsert_lead(connection, lead)
+    try:
+        normalized = upsert_lead(connection, lead)
+        lead_id = get_lead_id_by_url(connection, normalized) if normalized else None
+        if lead_id is not None:
+            replace_lead_score(connection, lead_id, lead_score)
+    except Exception as exc:
+        logger = logging.getLogger("lead")
+        logger.debug("Could not persist score for no-website lead: %s", exc)
+
+
+def _crawl_summary(crawl: Optional[CrawlResult]) -> Optional[dict]:
+    """Flatten a CrawlResult into the structured dict the scorer consumes."""
+    if crawl is None:
+        return None
+    return {
+        "ok": bool(crawl.ok),
+        "error": crawl.error,
+        "merged_text": crawl.merged_text,
+        "contact_clues": list(crawl.contact_clues),
+        "pages": [
+            {"url": page.url, "label": page.label, "title": page.title, "text": page.text}
+            for page in crawl.pages
+        ],
+    }
+
+
+def _fallback_lead_score(fallback) -> "LeadScore":
+    """Convert the legacy ScoreResult into a LeadScore for the columns.
+
+    Used only if the deterministic engine itself raises (should not happen);
+    keeps the pipeline running with backward-compatible values.
+    """
+    from src.scoring.base import LeadScore
+
+    return LeadScore(
+        final_score=fallback.score,
+        priority_label=fallback.priority,
+        dimension_scores={},
+        dimension_reasons={},
+        top_positive_reasons=fallback.reasons,
+        top_negative_reasons=[],
+        recommended_outreach_angle=fallback.recommendation,
+    )
 
 
 def _extract_from_fetch(
@@ -772,6 +883,11 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
         int(row["lead_id"]): row for row in seo_audits_for_run(connection, run_id)
     }
 
+    # Merge per-lead deterministic multi-dimensional score rows.
+    score_by_lead: dict[int, dict] = {
+        int(row["lead_id"]): row for row in lead_scores_for_run(connection, run_id)
+    }
+
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS)
         writer.writeheader()
@@ -804,6 +920,18 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
             record["pages_with_thin_content"] = ""
             record["pages_with_duplicate_titles"] = ""
             record["pages_with_images_missing_alt"] = ""
+            record["final_score"] = ""
+            record["priority_label"] = ""
+            record["discovery_quality_score"] = ""
+            record["contactability_score"] = ""
+            record["technical_health_score"] = ""
+            record["seo_health_score"] = ""
+            record["content_strength_score"] = ""
+            record["trust_professionalism_score"] = ""
+            record["outreach_potential_score"] = ""
+            record["top_positive_reasons"] = ""
+            record["top_negative_reasons"] = ""
+            record["recommended_outreach_angle"] = ""
             # Match the lead by its normalized URL (as stored by upsert).
             normalized = record.get("website_url") or ""
             lead_id = lead_id_by_normalized.get(normalize_url_for_dedupe(normalized))
@@ -814,6 +942,11 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
                 if seo_row is not None:
                     for key, value in csv_fields_from_row(seo_row).items():
                         record[key] = value
+                score_row = score_by_lead.get(lead_id)
+                if score_row is not None:
+                    for key, value in score_csv_fields_from_row(score_row).items():
+                        record[key] = value
+                    record["recommendation"] = record["recommended_outreach_angle"]
             writer.writerow({k: record.get(k) for k in EXPORT_COLUMNS})
 
     return out_path

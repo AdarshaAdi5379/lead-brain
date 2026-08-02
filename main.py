@@ -7,6 +7,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 try:
@@ -29,17 +30,22 @@ from src.llm_extraction import extract_lead_from_fetch, extract_lead_from_merged
 from src.scoring import score_lead
 from src.scraping.focused_crawler import CrawlResult, FocusedCrawler
 from src.scraping.page_cache import PageCache
+from src.seo.report import csv_fields_from_row, to_llm_text
+from src.seo.site_audit import audit_site, probe_well_known
 from src.settings import (
     CRAWL_CACHE_DIR,
     CRAWL_CACHE_FILE,
     DB_PATH,
     FINGERPRINT_MIN_CONFIDENCE,
     FINGERPRINT_MIN_OVERRIDE_CONFIDENCE,
+    SEO_BLEND_WEIGHT,
 )
 from src.storage.db import connect, init_db
 from src.storage.leads import LeadUpsert, upsert_lead
 from src.storage.normalization import normalize_url_for_dedupe
 from src.storage.runs import RunStats, complete_run, start_run, update_run_stats
+from src.storage.seo import audits_for_run as seo_audits_for_run
+from src.storage.seo import replace_audit as replace_seo_audit
 from src.storage.technologies import detections_for_run, get_lead_id_by_url, replace_detections
 from src.url_loader import SeedRow, load_seed_csv
 
@@ -66,6 +72,14 @@ EXPORT_COLUMNS = [
     "confidence_summary",
     "extraction_success",
     "last_error",
+    "site_seo_score",
+    "seo_health",
+    "seo_issue_summary",
+    "pages_with_missing_title",
+    "pages_with_missing_meta_description",
+    "pages_with_thin_content",
+    "pages_with_duplicate_titles",
+    "pages_with_images_missing_alt",
 ]
 
 
@@ -372,31 +386,57 @@ def _run_seeds(
                 crawl: Optional[CrawlResult] = None
                 if crawler is not None and not no_crawl and fetch.success:
                     crawl = await crawler.crawl(fetcher, seed.url, home_fetch=fetch)
-                    if crawl.ok and crawl.merged_text.strip():
+
+                # Deterministic local SEO audit over the already-collected HTML
+                # (no extra fetch unless SEO_PROBE_ROBOTS is enabled, no LLM,
+                # no paid APIs). The summary is passed to the LLM as neutral
+                # context; it never performs SEO detection itself.
+                seo_audit = None
+                seo_text: Optional[str] = None
+                try:
+                    seo_probe = (
+                        await probe_well_known(fetcher, seed.url) if fetch.success else None
+                    )
+                    seo_audit = _audit_site_for_seed(seed, fetch, crawl, probe=seo_probe)
+                    seo_text = to_llm_text(seo_audit) if seo_audit is not None else None
+                    if seo_audit is not None:
                         logger.info(
-                            "Sending merged content (%d chars, %d pages) to LLM for %s",
-                            len(crawl.merged_text),
-                            len(crawl.pages),
+                            "SEO audit for %s: %d/100 (%s, %d pages)",
                             seed.url,
+                            seo_audit.site_score,
+                            seo_audit.overall_health,
+                            seo_audit.total_pages_audited,
                         )
-                        extracted = _extract_from_crawl(
-                            seed, crawl, fingerprint=fingerprint
-                        )
-                    else:
-                        logger.info(
-                            "Crawl produced no usable content for %s; using homepage only",
-                            seed.url,
-                        )
-                        extracted = _extract_from_fetch(
-                            seed, fetch, fingerprint=fingerprint
-                        )
+                except Exception as exc:  # audit must never break the pipeline
+                    logger.debug("SEO audit failed for %s: %s", seed.url, exc)
+
+                if crawl is not None and crawl.ok and crawl.merged_text.strip():
+                    logger.info(
+                        "Sending merged content (%d chars, %d pages) to LLM for %s",
+                        len(crawl.merged_text),
+                        len(crawl.pages),
+                        seed.url,
+                    )
+                    extracted = _extract_from_crawl(
+                        seed, crawl, fingerprint=fingerprint, detected_seo_text=seo_text
+                    )
                 else:
-                    extracted = _extract_from_fetch(seed, fetch, fingerprint=fingerprint)
+                    logger.info(
+                        "Crawl produced no usable content for %s; using homepage only",
+                        seed.url,
+                    )
+                    extracted = _extract_from_fetch(
+                        seed, fetch, fingerprint=fingerprint, detected_seo_text=seo_text
+                    )
 
                 if platform_override:
                     extracted["platform"] = platform_override
 
-                score = score_lead(extracted)
+                score = score_lead(
+                    extracted,
+                    site_seo_score=seo_audit.site_score if seo_audit is not None else None,
+                    seo_blend_weight=SEO_BLEND_WEIGHT,
+                )
 
                 lead = LeadUpsert(
                     website_url=seed.url,
@@ -439,6 +479,17 @@ def _run_seeds(
                             replace_detections(connection, lead_id, list(fingerprint.detections))
                     except Exception as exc:
                         logger.debug("Could not persist detections for %s: %s", seed.url, exc)
+
+                if seo_audit is not None:
+                    try:
+                        normalized = normalize_url_for_dedupe(seed.url) if seed.url else ""
+                        lead_id = get_lead_id_by_url(connection, normalized) if normalized else None
+                        if lead_id is not None:
+                            site_dict = seo_audit.to_dict()
+                            page_dicts = site_dict.pop("pages")
+                            replace_seo_audit(connection, lead_id, site_dict, page_dicts)
+                    except Exception as exc:
+                        logger.debug("Could not persist SEO audit for %s: %s", seed.url, exc)
 
                 usage = extracted.get("_usage")
                 cost = estimate_cost(usage) if usage is not None else None
@@ -523,6 +574,25 @@ def _tech_banner(fingerprint: Optional[FingerprintResult]) -> Optional[str]:
     return text if fingerprint.detections else None
 
 
+def _audit_site_for_seed(seed: SeedRow, fetch, crawl: Optional[CrawlResult], *, probe=None):
+    """Run the deterministic SEO audit over crawl pages, or the homepage only.
+
+    Returns None when there is nothing to audit (failed fetch / empty HTML).
+    """
+    if crawl is not None and crawl.ok and crawl.pages:
+        return audit_site(crawl.pages, crawl.url, probe=probe)
+    if fetch.success and (fetch.html or "").strip():
+        home = SimpleNamespace(
+            url=fetch.final_url or fetch.url,
+            label="HOME",
+            title="",
+            text=fetch.text or "",
+            html=fetch.html or "",
+        )
+        return audit_site([home], home.url, probe=probe)
+    return None
+
+
 def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
     extracted = validate_extracted_lead(
         {
@@ -569,7 +639,10 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
 
 
 def _extract_from_fetch(
-    seed: SeedRow, fetch, fingerprint: Optional[FingerprintResult] = None
+    seed: SeedRow,
+    fetch,
+    fingerprint: Optional[FingerprintResult] = None,
+    detected_seo_text: Optional[str] = None,
 ) -> dict:
     if not fetch.success:
         # Loggable error text is stored in last_error.
@@ -591,6 +664,7 @@ def _extract_from_fetch(
         result = extract_lead_from_fetch(
             fetch,
             detected_technology_text=_tech_banner(fingerprint),
+            detected_seo_text=detected_seo_text,
         )
         payload = result.lead.to_dict()
         # Attach usage for cost tracking without storing it in DB.
@@ -615,7 +689,10 @@ def _extract_from_fetch(
 
 
 def _extract_from_crawl(
-    seed: SeedRow, crawl: CrawlResult, fingerprint: Optional[FingerprintResult] = None
+    seed: SeedRow,
+    crawl: CrawlResult,
+    fingerprint: Optional[FingerprintResult] = None,
+    detected_seo_text: Optional[str] = None,
 ) -> dict:
     try:
         result = extract_lead_from_merged_content(
@@ -623,6 +700,7 @@ def _extract_from_crawl(
             source_url=crawl.url,
             contact_clues=list(crawl.contact_clues),
             detected_technology_text=_tech_banner(fingerprint),
+            detected_seo_text=detected_seo_text,
         )
         payload = result.lead.to_dict()
         # Attach usage to the payload for cost tracking without storing it in DB.
@@ -689,6 +767,11 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
     for lead in connection.execute("SELECT id, website_url_normalized FROM leads WHERE run_id = ?", (run_id,)):
         lead_id_by_normalized[str(lead["website_url_normalized"])] = int(lead["id"])
 
+    # Merge per-lead site-level SEO audit summaries.
+    seo_by_lead: dict[int, dict] = {
+        int(row["lead_id"]): row for row in seo_audits_for_run(connection, run_id)
+    }
+
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS)
         writer.writeheader()
@@ -713,12 +796,24 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
             record["hosting_cdn"] = ""
             record["analytics"] = ""
             record["confidence_summary"] = ""
+            record["site_seo_score"] = ""
+            record["seo_health"] = ""
+            record["seo_issue_summary"] = ""
+            record["pages_with_missing_title"] = ""
+            record["pages_with_missing_meta_description"] = ""
+            record["pages_with_thin_content"] = ""
+            record["pages_with_duplicate_titles"] = ""
+            record["pages_with_images_missing_alt"] = ""
             # Match the lead by its normalized URL (as stored by upsert).
             normalized = record.get("website_url") or ""
             lead_id = lead_id_by_normalized.get(normalize_url_for_dedupe(normalized))
             if lead_id is not None:
                 for key, value in tech_by_lead.get(lead_id, {}).items():
                     record[key] = value
+                seo_row = seo_by_lead.get(lead_id)
+                if seo_row is not None:
+                    for key, value in csv_fields_from_row(seo_row).items():
+                        record[key] = value
             writer.writerow({k: record.get(k) for k in EXPORT_COLUMNS})
 
     return out_path

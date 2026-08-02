@@ -65,3 +65,13 @@ FINGERPRINT_MIN_CONFIDENCE: int = int(os.environ.get("FINGERPRINT_MIN_CONFIDENCE
 FINGERPRINT_MIN_OVERRIDE_CONFIDENCE: int = int(
     os.environ.get("FINGERPRINT_MIN_OVERRIDE_CONFIDENCE", "60")
 )
+
+# Deterministic local SEO audit (Phase 12). No paid APIs, no cloud, no LLM.
+# Max HTML characters retained per page for the audit (bounds memory + disk).
+SEO_PAGE_HTML_MAX_CHARS: int = int(os.environ.get("SEO_PAGE_HTML_MAX_CHARS", "150000"))
+# When enabled, the audit probes same-origin /robots.txt and /sitemap.xml once
+# per site (bounded). Disabled by default: the audit otherwise works purely
+# from already-crawled HTML, with no extra network requests.
+SEO_PROBE_ROBOTS: bool = os.environ.get("SEO_PROBE_ROBOTS", "").strip().lower() in {"1", "true", "yes", "on"}
+# Weight of the site SEO score when blending into the lead score.
+SEO_BLEND_WEIGHT: float = float(os.environ.get("SEO_BLEND_WEIGHT", "0.15"))

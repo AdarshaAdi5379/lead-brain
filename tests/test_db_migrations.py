@@ -91,3 +91,58 @@ class TestDbMigrations(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_init_db_creates_seo_tables(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        try:
+            init_db(connection)
+            tables = {
+                r["name"]
+                for r in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            self.assertIn("seo_audits", tables)
+            self.assertIn("seo_page_audits", tables)
+
+            site_cols = {
+                r["name"]
+                for r in connection.execute("PRAGMA table_info(seo_audits)").fetchall()
+            }
+            for column in (
+                "lead_id",
+                "site_score",
+                "overall_health",
+                "total_pages_audited",
+                "pages_with_title",
+                "pages_with_thin_content",
+                "severity_summary",
+                "raw_summary_json",
+            ):
+                self.assertIn(column, site_cols)
+
+            page_cols = {
+                r["name"]
+                for r in connection.execute("PRAGMA table_info(seo_page_audits)").fetchall()
+            }
+            for column in (
+                "seo_audit_id",
+                "url",
+                "title_present",
+                "h1_count",
+                "noindex",
+                "images_missing_alt_count",
+                "issues_json",
+            ):
+                self.assertIn(column, page_cols)
+
+            indexes = {
+                r["name"]
+                for r in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+            self.assertIn("ux_seo_audits_lead_id", indexes)
+        finally:
+            connection.close()
+

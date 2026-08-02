@@ -10,6 +10,8 @@ import streamlit as st
 
 from src.settings import DB_PATH
 from src.storage.db import init_db
+from src.storage.seo import audits_by_lead as seo_audits_by_lead
+from src.storage.seo import page_audits_for_audit
 from src.storage.technologies import detections_by_lead
 
 try:
@@ -70,11 +72,13 @@ def main() -> None:
     all_rows: list[LeadRow] = []
     total_db_leads = 0
     tech_by_lead: dict[int, list[dict[str, Any]]] = {}
+    seo_by_lead: dict[int, dict[str, Any]] = {}
     with _connect(db_path) as connection:
         init_db(connection)
         all_rows = _fetch_leads(connection)
         total_db_leads = len(all_rows)
         tech_by_lead = detections_by_lead(connection)
+        seo_by_lead = seo_audits_by_lead(connection)
 
     if not all_rows:
         st.info("No leads found yet. Use the discovery panel in the sidebar to find new leads.")
@@ -105,6 +109,29 @@ def main() -> None:
         key="tech_category_filter",
     )
 
+    st.sidebar.subheader("SEO filters")
+    seo_health_filter = st.sidebar.multiselect(
+        "SEO health",
+        options=["Excellent", "Good", "Fair", "Poor", "Critical"],
+        default=[],
+        key="seo_health_filter",
+    )
+    min_seo_score = int(st.sidebar.slider("Min site SEO score", 0, 100, 0, key="min_seo_score"))
+
+    # Per-page toggles applied to the selected lead's page breakdown.
+    page_missing_title = st.sidebar.checkbox("Pages missing title", key="page_missing_title")
+    page_missing_meta = st.sidebar.checkbox("Pages missing meta description", key="page_missing_meta")
+    page_thin = st.sidebar.checkbox("Pages with thin content", key="page_thin")
+    page_noindex = st.sidebar.checkbox("Pages with noindex", key="page_noindex")
+    page_missing_alt = st.sidebar.checkbox("Pages with images missing alt", key="page_missing_alt")
+    page_issue_filters = {
+        "missing_title": page_missing_title,
+        "missing_meta": page_missing_meta,
+        "thin": page_thin,
+        "noindex": page_noindex,
+        "missing_alt": page_missing_alt,
+    }
+
     # Require at least one detection in a selected category.
     def _has_tech(lead_id: int, categories: list[str]) -> bool:
         if not categories:
@@ -113,12 +140,23 @@ def main() -> None:
         detected = {d.get("category") for d in detections}
         return bool(detected & set(categories))
 
+    def _has_seo(lead_id: int) -> bool:
+        seo = seo_by_lead.get(lead_id)
+        if not seo:
+            return not (seo_health_filter or min_seo_score > 0)
+        if seo_health_filter and str(seo.get("overall_health")) not in set(seo_health_filter):
+            return False
+        if int(seo.get("site_score") or 0) < min_seo_score:
+            return False
+        return True
+
     filtered = [
         row
         for row in all_rows
         if (row.score is not None and row.score >= min_score)
         and (not priority_filter or (row.priority in set(priority_filter)))
         and _has_tech(row.id, tech_filter)
+        and _has_seo(row.id)
     ]
     filtered = filtered[:max_rows]
 
@@ -168,6 +206,8 @@ def main() -> None:
                 str(d.get("technology_name"))
                 for d in sorted(tech_by_lead.get(r.id, []), key=lambda x: -int(x.get("confidence") or 0))[:3]
             ),
+            "seo_score": seo_by_lead.get(r.id, {}).get("site_score"),
+            "seo_health": seo_by_lead.get(r.id, {}).get("overall_health"),
             "outreach_sent": r.outreach_sent,
             "outreach_sent_at": r.outreach_sent_at,
         }
@@ -187,6 +227,8 @@ def main() -> None:
             "priority",
             "platform",
             "technologies",
+            "seo_score",
+            "seo_health",
         ]
         display_df = df[[c for c in display_cols if c in df.columns]]
         event = st.dataframe(
@@ -250,6 +292,8 @@ def main() -> None:
                 st.markdown(f"- **{d.get('technology_name')}** — {percent}% ({d.get('category')})")
         else:
             st.caption("No technology detections stored for this lead.")
+
+        _render_seo_section(db_path, selected.id, seo_by_lead, page_issue_filters)
 
         st.markdown("### Lead actions")
         sent = st.checkbox("Outreach sent", value=bool(selected.outreach_sent), key=f"sent_{selected.id}")
@@ -337,6 +381,93 @@ def _label_for_id(rows: list[LeadRow], lead_id: int) -> str:
     name = row.business_name or "(no name)"
     score = row.score if row.score is not None else "—"
     return f"{name} — {score} ({row.priority or '—'})"
+
+
+def _render_seo_section(
+    db_path: Path,
+    lead_id: int,
+    seo_by_lead: dict[int, dict[str, Any]],
+    page_issue_filters: dict[str, bool],
+) -> None:
+    st.markdown("### SEO audit")
+    seo = seo_by_lead.get(lead_id)
+    if not seo:
+        st.caption("No SEO audit stored for this lead.")
+        return
+
+    col_score, col_health, col_pages = st.columns(3)
+    col_score.metric("Site SEO score", f"{seo.get('site_score')}/100")
+    col_health.metric("Health", str(seo.get("overall_health") or "—"))
+    col_pages.metric("Pages audited", str(seo.get("total_pages_audited") or 0))
+
+    summary = seo.get("severity_summary") or []
+    if summary:
+        st.markdown("**Top site issues**")
+        for issue in summary[:5]:
+            st.markdown(f"- {issue.get('reason')}")
+
+    connection = _connect(db_path)
+    try:
+        page_rows = page_audits_for_audit(connection, int(seo["id"]))
+    finally:
+        connection.close()
+    if not page_rows:
+        st.caption("No per-page audits stored.")
+        return
+
+    filtered_pages = [
+        page
+        for page in page_rows
+        if _passes_page_filters(page, page_issue_filters)
+    ]
+
+    with st.expander(f"Page breakdown ({len(filtered_pages)} of {len(page_rows)})", expanded=True):
+        display = [
+            {
+                "url": page.get("url"),
+                "page_type": page.get("page_type"),
+                "score": page.get("score"),
+                "health": page.get("health"),
+                "title": "yes" if page.get("title_present") else "no",
+                "meta_description": "yes" if page.get("meta_description_present") else "no",
+                "h1": page.get("h1_count"),
+                "words": page.get("word_count"),
+                "noindex": "yes" if page.get("noindex") else "",
+                "issues": len(page.get("issues") or []),
+            }
+            for page in filtered_pages
+        ]
+        if pd is not None:
+            st.dataframe(pd.DataFrame(display), use_container_width=True, hide_index=True)
+        else:
+            st.dataframe(display, use_container_width=True)
+
+        for page in filtered_pages[:5]:
+            issues = page.get("issues") or []
+            if not issues:
+                continue
+            with st.expander(f"{page.get('url')}"):
+                for issue in issues[:8]:
+                    st.markdown(f"- **{issue.get('severity')}** — {issue.get('reason')}")
+                    st.caption(f"Fix: {issue.get('fix')}")
+
+
+def _passes_page_filters(page: dict[str, Any], filters: dict[str, bool]) -> bool:
+    if filters.get("missing_title") and not page.get("title_present"):
+        return True
+    if filters.get("missing_meta") and not page.get("meta_description_present"):
+        return True
+    if filters.get("thin"):
+        issues = {issue.get("code") for issue in (page.get("issues") or [])}
+        if "thin_content" in issues:
+            return True
+    if filters.get("noindex") and page.get("noindex"):
+        return True
+    if filters.get("missing_alt") and int(page.get("images_missing_alt_count") or 0) > 0:
+        return True
+    if not any(filters.values()):
+        return True
+    return False
 
 
 def _outreach_email(lead: LeadRow) -> str:

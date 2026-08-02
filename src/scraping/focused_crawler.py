@@ -18,6 +18,7 @@ from src.settings import (
     MAX_CRAWL_DEPTH,
     MAX_CRAWL_PAGES,
     MAX_PAGE_CHARACTERS,
+    SEO_PAGE_HTML_MAX_CHARS,
 )
 
 logger = logging.getLogger("lead.crawl")
@@ -42,6 +43,9 @@ class PageRecord:
     label: str
     title: str
     text: str
+    # Bounded raw HTML fragment kept for the deterministic local SEO audit.
+    # Empty for legacy cache entries that never stored HTML.
+    html: str = ""
 
 
 @dataclass(frozen=True)
@@ -133,7 +137,13 @@ class FocusedCrawler:
             home_text = trim_text(home_content.text, max_chars=self._max_page_characters)
             sections.append(Section(label="HOME", url=final_home_url, text=home_text))
             records.append(
-                PageRecord(url=final_home_url, label="HOME", title=home_content.title, text=home_text)
+                PageRecord(
+                    url=final_home_url,
+                    label="HOME",
+                    title=home_content.title,
+                    text=home_text,
+                    html=self._bounded_html(home_html),
+                )
             )
 
         for link in selected:
@@ -143,6 +153,7 @@ class FocusedCrawler:
                 page_text = cached_text
                 page_title = ""
                 page_url = link.url
+                page_html = self._cache.get_html(link.url)
                 # Rebuild contact clues from cached plain text (emails only).
                 clues.extend(extract_contact_clues(cached_text, link.url))
             else:
@@ -156,8 +167,9 @@ class FocusedCrawler:
                 page_content = parse_page(page_fetch.html or "", page_url)
                 page_text = page_content.text
                 page_title = page_content.title
+                page_html = self._bounded_html(page_fetch.html or "")
                 clues.extend(extract_contact_clues(page_fetch.html or "", page_url))
-                self._cache.put(link.url, page_text)
+                self._cache.put(link.url, page_text, html=page_html)
 
             if not page_text.strip():
                 logger.info("Skipping empty page: %s", link.url)
@@ -166,7 +178,15 @@ class FocusedCrawler:
             trimmed = trim_text(page_text, max_chars=self._max_page_characters)
             label = label_for_link(link)
             sections.append(Section(label=label, url=page_url, text=trimmed))
-            records.append(PageRecord(url=page_url, label=label, title=page_title, text=trimmed))
+            records.append(
+                PageRecord(
+                    url=page_url,
+                    label=label,
+                    title=page_title,
+                    text=trimmed,
+                    html=page_html,
+                )
+            )
 
         unique_clues = self._dedupe_clues(clues)
         if unique_clues:
@@ -200,6 +220,11 @@ class FocusedCrawler:
         )
 
     # --- helpers ---------------------------------------------------------
+
+    @staticmethod
+    def _bounded_html(html: str) -> str:
+        """Cap the raw HTML retained for the SEO audit (memory + disk bound)."""
+        return (html or "")[:SEO_PAGE_HTML_MAX_CHARS]
 
     @staticmethod
     def _exclude_homepage(links: list[Link], home_url: str) -> list[Link]:

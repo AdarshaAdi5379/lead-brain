@@ -63,6 +63,22 @@ class PageCache:
         text = record.get("text")
         return text if isinstance(text, str) else None
 
+    def get_html(self, url: str) -> Optional[str]:
+        """Return the bounded HTML fragment cached for a URL, or None on a miss.
+
+        Legacy records (written before HTML was stored) return None so callers
+        can fall back to text-only signals instead of treating the page as
+        having missing HTML."""
+        if not url:
+            return None
+        with self._lock:
+            self._load()
+            record = self._memory.get(url)
+        if not isinstance(record, dict):
+            return None
+        html = record.get("html")
+        return html if isinstance(html, str) and html else None
+
     def get_hash(self, url: str) -> Optional[str]:
         if not url:
             return None
@@ -74,11 +90,13 @@ class PageCache:
         value = record.get("hash")
         return value if isinstance(value, str) else None
 
-    def put(self, url: str, text: str) -> None:
+    def put(self, url: str, text: str, html: Optional[str] = None) -> None:
         if not url:
             return
         text = text or ""
         record = {"hash": content_hash(text), "text": text}
+        if html:
+            record["html"] = html
         with self._lock:
             self._load()
             self._memory[url] = record

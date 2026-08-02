@@ -26,7 +26,11 @@ def _clamp_int(value: int, low: int = 0, high: int = 100) -> int:
     return max(low, min(high, value))
 
 
-def score_lead(extracted: dict[str, Any]) -> ScoreResult:
+def score_lead(
+    extracted: dict[str, Any],
+    site_seo_score: Optional[int] = None,
+    seo_blend_weight: float = 0.15,
+) -> ScoreResult:
     """
     PRD v1 scoring (Section 7) with small clarifications:
     - Baseline score = 50, then add/subtract weights, clamp to [0, 100].
@@ -34,6 +38,10 @@ def score_lead(extracted: dict[str, Any]) -> ScoreResult:
     - Platform matching is exact match (case-insensitive) after trimming.
     - Unknown complexity/load_speed/platform produce no score change.
     - Recommendation mentions top 2 strongest reasons (by absolute weight).
+
+    When ``site_seo_score`` is provided (deterministic local SEO audit), the
+    final score is a weighted blend of the signal-based score and the SEO
+    score (default 15% SEO weight). Omitting it keeps the original behaviour.
     """
 
     baseline = 50
@@ -88,10 +96,21 @@ def score_lead(extracted: dict[str, Any]) -> ScoreResult:
     if complexity in {"complex", "large"}:
         adjustments.append((-30, f"High complexity ({complexity})"))
 
+    seo_score: Optional[int] = None
+    if site_seo_score is not None:
+        try:
+            seo_score = _clamp_int(int(site_seo_score))
+        except (TypeError, ValueError):
+            seo_score = None
+
     total = baseline + sum(points for points, _ in adjustments)
+    if seo_score is not None and 0 < float(seo_blend_weight) < 1:
+        total = round(float(seo_blend_weight) * seo_score + (1.0 - float(seo_blend_weight)) * total)
     score = _clamp_int(total)
     priority = _priority_for(score)
     reasons = _top_reasons(adjustments, top_n=2)
+    if seo_score is not None:
+        reasons = [f"SEO site score ({seo_score}/100)"] + reasons
 
     return ScoreResult(
         score=score,

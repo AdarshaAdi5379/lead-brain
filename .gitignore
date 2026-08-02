@@ -7,6 +7,9 @@ venv/
 
 .env
 
+# Private seed list (never commit; see AGENTS.md).
+business_urls.csv
+
 data/
 exports/
 logs/

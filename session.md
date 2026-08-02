@@ -1,5 +1,5 @@
 Session Notes — lead-brain
-Last updated: 2026-05-19 (Asia/Kolkata)
+Last updated: 2026-08-02 (Asia/Kolkata)
 
 Repo
 - GitHub: `AdarshaAdi5379/lead-brain`
@@ -111,6 +111,16 @@ Phase 10 — Focused multi-page website crawling (completed)
 - Fix: `src/llm/openai_responses.py` now sends Responses content blocks as `type: "input_text"` — the old `"text"` shape is rejected by the current API (affects both v1 and crawl paths; worth noting the account currently reports no credits / HTTP 429).
 - Live fixture-site verification: home + about/services/contact/portfolio selected (privacy/blog skipped), 927 chars merged, second run reused 4 cached pages (visited=1), end-to-end pipeline run completes.
 - Tests: 43 new across `tests/test_link_extractor.py`, `tests/test_page_ranker.py`, `tests/test_content_extractor.py`, `tests/test_content_merger.py`, `tests/test_focused_crawler.py`. Full suite: 88 tests pass.
+
+Phase 11 — Local Visual Website Audit (completed)
+- Offline, local screenshot-based visual quality audit. Playwright (or cached HTML) renders pages; `src/visual/capture.py` captures bounded desktop + mobile screenshots (max `max_screenshots=5` per lead, viewport + pixel caps in `src/visual/config.py`).
+- Deterministic computer-vision-lite heuristics over screenshots (`src/visual/heuristics.py`): ink ratio, contrast, row/col variance, region count, dominant-color share, mobile viewport; fixed an `_grid_sample` out-of-bounds read and replaced deprecated Pillow `getdata()` with `get_flattened_data` (compat shim).
+- Signals (`src/visual/signals.py`): modern/outdated design, clutter, weak hierarchy, weak mobile, weak/strong CTA, strong brand, responsive, low contrast. Additive weighted scoring with sub-qualities (layout/readability/branding/mobile/conversion), `score_page`/`score_site`/`label_for_score` in `src/visual/score.py`; health bands Excellent≥85 / Good≥70 / Fair≥50 / Poor≥30.
+- Report (`src/visual/report.py`): `build_report` → `VisualAuditReport` (site counts, summary, `csv_fields`/`csv_fields_from_row`, `to_llm_text` neutral banner); optional multimodal summary in `src/visual/summarizer.py` (gated by `VISUAL_LLM_ENABLED`, degrades gracefully without an API key).
+- Storage (`src/storage/db.py`, `src/storage/visual.py`): `visual_audits` + `visual_page_audits` tables (additive `llm_summary` migration), delete-then-insert persistence, per-lead lookups (`audits_by_lead`, `page_audits_for_audit`).
+- Pipeline wiring (`main.py`): `run_visual_audit` runs after the SEO audit and before LLM extraction, gated by `visual_config.enabled` and fetch success; no-website/failed-fetch seeds yield no-op results and never break the run. The neutral `to_llm_text` banner reaches the LLM as context only. Dashboard (`dashboard.py`) sidebar filters: Visual health, min visual score, weak mobile, clutter, weak CTA, strong branding.
+- Verified offline: `python main.py --input business_urls.sample.csv --limit 3 --no-crawl --log-file none` ran the visual audit (example.com → 98/100 Excellent) and completed end-to-end.
+- Tests: 10 new files (`tests/test_visual_*.py` + `tests/visual_fixtures.py`); full suite 338 tests pass (`python -m unittest discover -s tests`).
 
 Remaining nice-to-haves (Phase 10)
 - Discovery UX: choose city/category in the dashboard and run it from the UI.

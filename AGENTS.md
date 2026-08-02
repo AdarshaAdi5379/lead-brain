@@ -13,8 +13,9 @@ Lead-brain: local-lead finder for freelance web devs. Manual CSV (or OSM discove
 
 ## Architecture
 
-- Pipeline entrypoint: `main.py` → `_run_seeds` → per seed: fingerprint (offline) → crawl → SEO audit (offline) → LLM extraction → scoring (offline) → opportunity detection (offline) → `upsert_lead` → persist detections/audit/score/opportunities → CSV export (`_export_csv_for_run`).
+- Pipeline entrypoint: `main.py` → `_run_seeds` → per seed: fingerprint (offline) → crawl → SEO audit (offline) → `visual audit` (offline, screenshot-based) → LLM extraction → scoring (offline) → opportunity detection (offline) → `upsert_lead` → persist detections/audit/score/opportunities → CSV export (`_export_csv_for_run`).
 - Four deterministic engines — `src/fingerprinting/`, `src/seo/`, `src/scoring/`, `src/opportunities/`: pure functions, **no network, no LLM, no DB access**. The LLM only extracts; engine output reaches the LLM as neutral banner text (`to_llm_text`), never as instructions to infer.
+- Added in Phase 11: `src/visual/` runs a bounded, offline visual quality audit (Playwright screenshots or reused cached HTML + deterministic CV-lite heuristics) after the SEO audit and before LLM extraction; its findings reach the LLM only as neutral banner text (`src/visual/report.py::to_llm_text`), never as inference prompts. The optional multimodal summary is gated behind `VISUAL_LLM_ENABLED` and degrades gracefully without an API key.
 - `ScoringInputs` (`src/scoring/base.py`) is the shared input contract: main.py builds it once and feeds `score_site_lead` and `detect_opportunities`. All fields optional — engines must never crash on missing data (enforced by `test_scoring_missing_data.py`). No-website leads must produce empty/no-op engine results, not errors.
 - Engine tunables live in `ScoringConfig` / `OpportunityConfig` (`config.py`); no magic numbers in engine code. Detector order/registry: `src/opportunities/registry.py`.
 - Every pipeline stage (fingerprint, crawl, audit, scoring, opportunities, persistence) is wrapped in try/except — a failure never breaks the run; LLM extraction degrades to a failed-lead dict without `OPENAI_API_KEY`.
@@ -23,7 +24,7 @@ Lead-brain: local-lead finder for freelance web devs. Manual CSV (or OSM discove
 ## DB conventions (src/storage/)
 
 - Schema: `SCHEMA_SQL` in `src/storage/db.py` (`CREATE TABLE IF NOT EXISTS`) plus additive `ALTER TABLE` migrations in `_apply_migrations`. **Adding a column requires both** — existing DBs (`data/leads.sqlite`) only get it via the migration.
-- Per-lead rows use delete-then-insert `replace_*` (detections, seo audit, `lead_scores`, `business_opportunities`) so re-runs stay consistent.
+- Per-lead rows use delete-then-insert `replace_*` (detections, seo audit, visual audit, `lead_scores`, `business_opportunities`) so re-runs stay consistent.
 - After `upsert_lead`, look up `lead_id` via `get_lead_id_by_url(normalize_url_for_dedupe(url))` — upsert dedupes by normalized URL.
 - Storage modules decode JSON columns into list/dict keys (e.g. `evidence`, `recommended_services`) but keep the raw `*_json` keys; CSV export merges via `csv_fields_from_row`-style helpers.
 

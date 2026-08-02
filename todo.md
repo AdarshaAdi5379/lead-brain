@@ -19,6 +19,7 @@ Progress (implemented)
 - ✅ Phase 8 (Lead Discovery via Google Places API): Steps 8.1–8.6 completed
 - ✅ Phase 9 (Free Lead Discovery via OpenStreetMap): Steps 9.1–9.6 completed — OSM (Overpass + Nominatim) replaces Google Places as the keyless default provider
 - ✅ Phase 10 (Focused Multi Page Website Crawling): crawler module, focused crawl in the pipeline, disk cache, 43 new tests — homepage + top ranked internal pages merged into one labelled document for the LLM
+- ✅ Phase 11 (Local Visual Website Audit): offline screenshot-based visual audit (bounded captures, deterministic CV-lite heuristics, additive 0–100 scoring, dashboard filters, SQLite persistence); gated by VISUAL config, degrades without API key; 338 tests pass.
 
 ---
 
@@ -532,7 +533,58 @@ Status
 
 ---
 
-Remaining optional improvements
-- Dashboard: table click-to-select lead (instead of dropdown)
+PHASE 11 — Local Visual Website Audit
+
+Goal
+- Add a local, offline visual quality audit so lead scores reflect how a site looks to a real visitor, not just its raw HTML/SEO. Visual findings feed the LLM only as neutral context text, never as inference prompts. No paid vision API is required; an optional multimodal summary is gated behind `VISUAL_LLM_ENABLED` and degrades gracefully without a key.
+
+Step 11.1 — Bounded screenshot capture
+Tasks
+- Render pages via Playwright (or reuse cached HTML), capture bounded desktop + mobile screenshots; caps on viewport/resolution and pixel count to keep it cheap and safe.
+Status
+- ✅ Done — `src/visual/capture.py`; tunables in `src/visual/config.py` (`VISUAL_ENABLED` default true, `VISUAL_VIEWPORT_DESKTOP` `1365x900`, `VISUAL_VIEWPORT_MOBILE` `390x844`, `VISUAL_FULLPAGE_MAX_HEIGHT` 12000, `max_screenshots=5`, `max_internal_pages=3`).
+- Done when: a screenshot file exists for the homepage (desktop + mobile) without raising.
+
+Step 11.2 — Heuristics (CV-lite)
+Tasks
+- Compute ink ratio, contrast, row/col variance, region count, dominant-color share, mobile-viewport detection from screenshots.
+Status
+- ✅ Done — `src/visual/heuristics.py`; fixed an `_grid_sample` out-of-bounds read and replaced deprecated Pillow `getdata()` with `get_flattened_data` (compat shim in `_pixel_values`).
+- Done when: synthetic fixture pages produce the expected ink/clutter/hierarchy ratios.
+
+Step 11.3 — Signals + scoring
+Tasks
+- Map heuristics → signals (modern/outdated design, clutter, weak hierarchy, weak mobile, weak/strong CTA, strong brand, responsive, low contrast); additive weighted scoring with sub-qualities; health bands.
+Status
+- ✅ Done — `src/visual/signals.py`, `src/visual/score.py` (`score_page`/`score_site`, `label_for_score`), `src/visual/layout.py`.
+- Done when: a clean site (example.com) scores 98/100 “Excellent”; a cluttered fixture scores markedly lower; no-website/failed-fetch yields no-op results without errors.
+
+Step 11.4 — Report + neutral LLM banner
+Tasks
+- Aggregate page reports into a site-level report with counts/summary; emit CSV fields; build a neutral markdown banner for the LLM (optional multimodal summary).
+Status
+- ✅ Done — `src/visual/report.py` (`build_report`, `to_llm_text`, `csv_fields`/`csv_fields_from_row`); `src/visual/summarizer.py` (optional, `VISUAL_LLM_ENABLED`, degrades without a key).
+- Done when: `to_llm_text` produces a banner naming the score, page count, and top issues/strengths.
+
+Step 11.5 — Storage
+Tasks
+- Persist site + per-page visual audits; support re-runs (delete-then-insert); expose per-lead lookups.
+Status
+- ✅ Done — tables `visual_audits`/`visual_page_audits` in `src/storage/db.py` (incl. additive `llm_summary` migration); persistence in `src/storage/visual.py` (`replace_visual_audit`, `audits_by_lead`, `page_audits_for_audit`, `audits_for_run`).
+- Done when: re-running a seed updates its row (no duplicate) and `audits_by_lead` returns the audit.
+
+Step 11.6 — Pipeline + dashboard wiring
+Tasks
+- Run visual audit after SEO audit, before LLM extraction; never break the run on failure; surface in dashboard.
+Status
+- ✅ Done — `main.py` calls `run_visual_audit` (gated by `visual_config.enabled` + fetch success, no-website → no-op), passes the neutral `to_llm_text` banner to the LLM only; `dashboard.py` sidebar filters (Visual health, min visual score, per-signal flags) + lead detail.
+- Done when: offline run shows “Visual audit for https://example.com: 98/100 (Excellent, 1 pages)”.
+
+Step 11.7 — Tests + verification
+Status
+- ✅ Done — `tests/test_visual_capture.py`, `test_visual_config.py`, `test_visual_engine.py`, `test_visual_heuristics.py`, `test_visual_layout.py`, `test_visual_report.py`, `test_visual_score.py`, `test_visual_signals.py`, `test_visual_storage.py`, `test_visual_summarizer.py` + `tests/visual_fixtures.py`; full suite 338 tests pass.
+- Verified: `python main.py --input business_urls.sample.csv --limit 3 --no-crawl --log-file none` completes end-to-end with the visual audit stage.
+
+---
 - Pricing presets per model (avoid manual env price config)
 - Outreach workflow: sent timestamp + “not contacted” exports

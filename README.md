@@ -1,6 +1,6 @@
 # Second Brain Lead Finder (v1)
 
-Manual CSV → scrape (Playwright) → LLM extract → score → SQLite → CSV exports → Streamlit dashboard.
+Manual CSV → scrape (Playwright) → visual audit → LLM extract → score → SQLite → CSV exports → Streamlit dashboard.
 
 ## Setup
 
@@ -53,6 +53,35 @@ Smoke-test the crawler against any site:
 ```bash
 python -m src.scraping.focused_crawler https://example.com --pages 5
 ```
+
+## Local visual audit
+
+After the multi-page crawl, the pipeline runs an offline, **local** visual quality
+audit before LLM extraction: it takes bounded desktop + mobile screenshots
+(Playwright, or reuses cached HTML) and runs deterministic, model-free quality
+heuristics over them, then feeds the result to the LLM only as neutral context
+text. No paid vision API is required. An optional multimodal summary is gated
+behind `VISUAL_LLM_ENABLED` and degrades gracefully when an OpenAI key is absent.
+
+Signals (additive, scored 0–100 with bands Excellent ≥85 / Good ≥70 / Fair ≥50 /
+Poor ≥30): modern/outdated design, clutter, weak visual hierarchy, weak mobile
+layout, weak/strong call-to-action, strong branding, responsive, low contrast.
+
+```bash
+# On by default whenever screenshots can be captured; disable with:
+VISUAL_ENABLED=0 python main.py --input business_urls.csv --limit 200
+```
+
+Tunables (env / via `src/settings.py`): `VISUAL_ENABLED` (default true),
+`VISUAL_VIEWPORT_DESKTOP` (`1365x900`), `VISUAL_VIEWPORT_MOBILE` (`390x844`),
+`VISUAL_FULLPAGE_MAX_HEIGHT` (12000), `VISUAL_LLM_ENABLED` (default false),
+`VISUAL_LLM_MODEL` / `OPENAI_VISION_MODEL` (`gpt-4o-mini`), `VISUAL_SCREENSHOT_DIR`
+(`data/screenshots`, gitignored). Per-lead capture caps: `max_screenshots=5`,
+`max_internal_pages=3`.
+
+Inspect screenshots in the Lead detail view, or filter leads by **Visual health**,
+**min visual score**, and per-signal flags (weak mobile, clutter, weak CTA, strong
+branding) in the dashboard sidebar.
 
 ## Run pipeline
 

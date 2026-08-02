@@ -115,6 +115,17 @@ Feature	Description
 Command‑line execution	A single command (python main.py) runs the full pipeline: load URLs → scrape → score → save → export.
 Cron / scheduler friendly	The script can be scheduled via cron (Linux/macOS), Task Scheduler (Windows), or GitHub Actions (free).
 Run logging	Each run records start/end time, URLs processed, successes/failures, and estimated cost.
+
+3.8 Visual Website Audit (offline, local)
+Purpose: Assess how a site looks to a real visitor — independently of its SEO/HTML — so opportunity scoring reflects real visual quality and the LLM receives neutral visual context without any paid vision API.
+
+- Offline screenshot capture: bounded desktop + mobile screenshots via Playwright (or reused cached HTML), with viewport/pixel caps to stay cheap and safe.
+- Deterministic heuristics (CV-lite): ink ratio, contrast, row/col variance, region count, dominant-color share, mobile viewport.
+- Signal scoring: additive weighted 0–100 score with health bands (Excellent ≥85 / Good ≥70 / Fair ≥50 / Poor ≥30) and sub-qualities (layout, readability, branding, mobile, conversion).
+- Neutral LLM context: visual findings are serialized to a neutral text banner and passed to the LLM as context only — never as instructions to infer conclusions.
+- Optional multimodal summary: a gated `VISUAL_LLM_ENABLED` summarizer adds an LLM-generated summary/issues/strengths when an OpenAI key is present; otherwise a deterministic template summary is used.
+- Dashboard filters: filter leads by Visual health, min visual score, and per-signal flags (weak mobile, clutter, weak CTA, strong branding) in the Streamlit sidebar.
+- Persistence (SQLite): results stored in `visual_audits` + `visual_page_audits` tables (delete-then-insert on re-run) and exported to CSV alongside SEO/lead scores.
 4. How It Works – Step by Step (End‑to‑End Flow)
 Prepare URL source
 You manually search Google Maps for “plumbers in Chicago” and copy 50 business website URLs into a CSV file (business_urls.csv). You can also reuse the same CSV later.
@@ -130,6 +141,9 @@ If a URL fails (e.g., network error, timeout), the script logs the failure and m
 
 Scoring phase
 After extraction, each lead passes through the scoring engine. The engine applies the weighted rules described in Section 7, producing a score (0–100) and a priority label.
+
+Visual audit phase (offline, before scoring)
+For each fetched site, the pipeline captures bounded desktop + mobile screenshots and runs deterministic visual-quality heuristics (ink ratio, contrast, row/col variance, region count, dominant-color share, mobile viewport). Findings aggregate to a 0–100 visual health score (bands Excellent ≥85 / Good ≥70 / Fair ≥50 / Poor ≥30) and are merged into the LLM prompt only as neutral context text. No paid vision API is required; an optional multimodal summary is gated by `VISUAL_LLM_ENABLED`.
 
 Storage
 All leads (successful and failed) are inserted into the SQLite database. If a lead already exists (based on URL), the new data updates the existing record, but does not create a duplicate.

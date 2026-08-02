@@ -14,16 +14,19 @@ class ScoringConfig:
     # Weighted aggregation: contactability matters heavily, SEO/content
     # strongly, trust/technical moderately, discovery modestly. Outreach
     # potential is derived from the other dimensions, so it only biases the
-    # result instead of standing alone.
+    # result instead of standing alone. Visual presentation (screenshots)
+    # carries the same weight as content: absent evidence is redistributed,
+    # never penalized.
     weights: dict[str, float] = field(
         default_factory=lambda: {
             "discovery_quality": 0.10,
-            "contactability": 0.25,
+            "contactability": 0.20,
             "technical_health": 0.15,
             "seo_health": 0.15,
             "content_strength": 0.10,
             "trust_professionalism": 0.10,
-            "outreach_potential": 0.15,
+            "outreach_potential": 0.10,
+            "visual_presentation": 0.10,
         }
     )
 
@@ -93,6 +96,18 @@ class ScoringConfig:
     outreach_improvement_max: int = 50
     outreach_active_points: int = 20
     outreach_service_site_points: int = 20
+
+    # --- visual_presentation (deterministic screenshot audit) ---
+    visual_no_website_score: int = 0
+    visual_unverifiable_score: int = 25
+    visual_weak_mobile_penalty: int = 10
+    visual_clutter_penalty: int = 10
+    visual_weak_cta_penalty: int = 5
+    visual_weak_hierarchy_penalty: int = 5
+    visual_strong_brand_bonus: int = 5
+    visual_modern_bonus: int = 5
+    # Below this visual score the outreach angle switches to a redesign pitch.
+    visual_redesign_max: int = 40
 
     # Reason output limits.
     top_reasons_max: int = 5

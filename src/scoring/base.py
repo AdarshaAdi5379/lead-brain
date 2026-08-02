@@ -12,6 +12,7 @@ DIMENSIONS = (
     "content_strength",
     "trust_professionalism",
     "outreach_potential",
+    "visual_presentation",
 )
 
 
@@ -51,6 +52,7 @@ class ScoringInputs:
     detections: Optional[list[dict[str, Any]]] = None
     crawl: Optional[dict[str, Any]] = None
     seo_audit: Optional[dict[str, Any]] = None
+    visual_audit: Optional[dict[str, Any]] = None
 
 
 @dataclass(frozen=True)

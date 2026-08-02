@@ -16,6 +16,7 @@ SCORE_COLUMNS = [
     "content_strength_score",
     "trust_professionalism_score",
     "outreach_potential_score",
+    "visual_presentation_score",
 ]
 
 DIMENSION_TO_COLUMN = {
@@ -26,6 +27,7 @@ DIMENSION_TO_COLUMN = {
     "content_strength": "content_strength_score",
     "trust_professionalism": "trust_professionalism_score",
     "outreach_potential": "outreach_potential_score",
+    "visual_presentation": "visual_presentation_score",
 }
 
 
@@ -56,7 +58,7 @@ def replace_score(connection: sqlite3.Connection, lead_id: int, score: LeadScore
           discovery_quality_score, contactability_score,
           technical_health_score, seo_health_score,
           content_strength_score, trust_professionalism_score,
-          outreach_potential_score,
+          outreach_potential_score, visual_presentation_score,
           dimension_reasons_json,
           top_positive_reasons_json,
           top_negative_reasons_json,
@@ -67,7 +69,7 @@ def replace_score(connection: sqlite3.Connection, lead_id: int, score: LeadScore
           :discovery_quality_score, :contactability_score,
           :technical_health_score, :seo_health_score,
           :content_strength_score, :trust_professionalism_score,
-          :outreach_potential_score,
+          :outreach_potential_score, :visual_presentation_score,
           :dimension_reasons_json,
           :top_positive_reasons_json,
           :top_negative_reasons_json,

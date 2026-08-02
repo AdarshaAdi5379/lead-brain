@@ -96,6 +96,28 @@ class TestOpportunityDetectors(unittest.TestCase):
         strong = self._detect(detect_website_redesign, self.strong)
         self.assertIsNone(strong)
 
+    def test_modern_visual_design_reduces_redesign_urgency(self) -> None:
+        from dataclasses import replace
+
+        base = legacy_platform_inputs()
+        plain = replace(
+            base,
+            visual_audit={"pages_with_clutter_signal": 0,
+                          "pages_with_weak_hierarchy_signal": 0,
+                          "pages_with_modern_design_signal": 0},
+        )
+        modern = replace(
+            base,
+            visual_audit={"pages_with_clutter_signal": 0,
+                          "pages_with_weak_hierarchy_signal": 0,
+                          "pages_with_modern_design_signal": 1},
+        )
+        plain_item = self._detect(detect_website_redesign, plain)
+        modern_item = self._detect(detect_website_redesign, modern)
+        self.assertIsNotNone(plain_item)
+        self.assertIsNotNone(modern_item)
+        self.assertLess(modern_item.score, plain_item.score)
+
     def test_technical_modernization_fires_on_legacy_stack(self) -> None:
         item = self._detect(detect_technical_modernization, self.legacy)
         self.assertIsNotNone(item)

@@ -103,6 +103,18 @@ def seo_audit(signals: ScoringInputs) -> dict[str, Any]:
     return signals.seo_audit if isinstance(signals.seo_audit, dict) else {}
 
 
+def visual_audit(signals: ScoringInputs) -> dict[str, Any]:
+    return signals.visual_audit if isinstance(signals.visual_audit, dict) else {}
+
+
+def visual_int(audit: dict[str, Any], key: str) -> int:
+    return as_int(audit.get(key))
+
+
+def visual_pages(audit: dict[str, Any]) -> list[dict[str, Any]]:
+    return [page for page in (audit.get("pages") or []) if isinstance(page, dict)]
+
+
 def audit_int(audit: dict[str, Any], key: str) -> int:
     return as_int(audit.get(key))
 

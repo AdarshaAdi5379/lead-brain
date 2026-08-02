@@ -154,6 +154,59 @@ CREATE INDEX IF NOT EXISTS ix_seo_page_audits_audit_id
 CREATE INDEX IF NOT EXISTS ix_seo_page_audits_noindex
   ON seo_page_audits(noindex);
 
+CREATE TABLE IF NOT EXISTS visual_audits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL,
+  visual_score INTEGER NOT NULL,
+  visual_health_label TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  total_pages_audited INTEGER NOT NULL DEFAULT 0,
+  pages_with_desktop_screenshot INTEGER NOT NULL DEFAULT 0,
+  pages_with_mobile_screenshot INTEGER NOT NULL DEFAULT 0,
+  pages_with_modern_design_signal INTEGER NOT NULL DEFAULT 0,
+  pages_with_clutter_signal INTEGER NOT NULL DEFAULT 0,
+  pages_with_weak_hierarchy_signal INTEGER NOT NULL DEFAULT 0,
+  pages_with_weak_mobile_signal INTEGER NOT NULL DEFAULT 0,
+  pages_with_weak_cta_signal INTEGER NOT NULL DEFAULT 0,
+  pages_with_strong_brand_signal INTEGER NOT NULL DEFAULT 0,
+  llm_summary TEXT,
+  raw_summary_json TEXT NOT NULL DEFAULT '{}',
+  audited_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_visual_audits_lead_id
+  ON visual_audits(lead_id);
+
+CREATE INDEX IF NOT EXISTS ix_visual_audits_visual_score
+  ON visual_audits(visual_score);
+
+CREATE TABLE IF NOT EXISTS visual_page_audits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  visual_audit_id INTEGER NOT NULL,
+  url TEXT NOT NULL,
+  page_type TEXT,
+  screenshot_available INTEGER NOT NULL DEFAULT 0,
+  mobile_screenshot_available INTEGER NOT NULL DEFAULT 0,
+  screenshot_path TEXT,
+  mobile_screenshot_path TEXT,
+  screenshot_hash TEXT,
+  visual_score INTEGER NOT NULL DEFAULT 0,
+  layout_quality INTEGER NOT NULL DEFAULT 0,
+  readability_quality INTEGER NOT NULL DEFAULT 0,
+  branding_quality INTEGER NOT NULL DEFAULT 0,
+  mobile_quality INTEGER NOT NULL DEFAULT 0,
+  conversion_quality INTEGER NOT NULL DEFAULT 0,
+  confidence REAL NOT NULL DEFAULT 0.0,
+  issues_json TEXT NOT NULL DEFAULT '[]',
+  strengths_json TEXT NOT NULL DEFAULT '[]',
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  FOREIGN KEY (visual_audit_id) REFERENCES visual_audits(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS ix_visual_page_audits_audit_id
+  ON visual_page_audits(visual_audit_id);
+
 CREATE TABLE IF NOT EXISTS lead_scores (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   lead_id INTEGER NOT NULL,
@@ -166,6 +219,7 @@ CREATE TABLE IF NOT EXISTS lead_scores (
   content_strength_score INTEGER NOT NULL DEFAULT 0,
   trust_professionalism_score INTEGER NOT NULL DEFAULT 0,
   outreach_potential_score INTEGER NOT NULL DEFAULT 0,
+  visual_presentation_score INTEGER NOT NULL DEFAULT 0,
   dimension_reasons_json TEXT NOT NULL DEFAULT '{}',
   top_positive_reasons_json TEXT NOT NULL DEFAULT '[]',
   top_negative_reasons_json TEXT NOT NULL DEFAULT '[]',
@@ -251,4 +305,18 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     if "pages_with_mixed_content" not in seo_columns:
         connection.execute(
             "ALTER TABLE seo_audits ADD COLUMN pages_with_mixed_content INTEGER NOT NULL DEFAULT 0"
+        )
+
+    visual_columns = {
+        r["name"] for r in connection.execute("PRAGMA table_info(visual_audits)").fetchall()
+    }
+    if "llm_summary" not in visual_columns:
+        connection.execute("ALTER TABLE visual_audits ADD COLUMN llm_summary TEXT")
+
+    score_columns = {
+        r["name"] for r in connection.execute("PRAGMA table_info(lead_scores)").fetchall()
+    }
+    if "visual_presentation_score" not in score_columns:
+        connection.execute(
+            "ALTER TABLE lead_scores ADD COLUMN visual_presentation_score INTEGER NOT NULL DEFAULT 0"
         )

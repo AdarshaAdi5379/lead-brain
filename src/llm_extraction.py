@@ -31,6 +31,7 @@ def extract_lead_from_fetch(
     timeout_s: int = 60,
     detected_technology_text: Optional[str] = None,
     detected_seo_text: Optional[str] = None,
+    detected_visual_text: Optional[str] = None,
 ) -> ExtractionResult:
     """
     Calls an OpenAI model to extract a lead payload, then validates against ExtractedLead contract.
@@ -45,6 +46,7 @@ def extract_lead_from_fetch(
         fetch,
         detected_technology_text=detected_technology_text,
         detected_seo_text=detected_seo_text,
+        detected_visual_text=detected_visual_text,
     )
 
     model = model_primary or os.environ.get("OPENAI_MODEL_PRIMARY", "").strip() or "gpt-4.1-nano"
@@ -77,6 +79,7 @@ def extract_lead_from_merged_content(
     timeout_s: int = 60,
     detected_technology_text: Optional[str] = None,
     detected_seo_text: Optional[str] = None,
+    detected_visual_text: Optional[str] = None,
 ) -> ExtractionResult:
     """Extract a lead from the focused-crawler's merged document.
 
@@ -89,6 +92,7 @@ def extract_lead_from_merged_content(
         contact_clues or [],
         detected_technology_text=detected_technology_text,
         detected_seo_text=detected_seo_text,
+        detected_visual_text=detected_visual_text,
     )
 
     model = model_primary or os.environ.get("OPENAI_MODEL_PRIMARY", "").strip() or "gpt-4.1-nano"
@@ -162,6 +166,7 @@ def _user_prompt(
     fetch: FetchResult,
     detected_technology_text: Optional[str] = None,
     detected_seo_text: Optional[str] = None,
+    detected_visual_text: Optional[str] = None,
 ) -> str:
     text = (fetch.text or "").strip()
     html = (fetch.html or "").strip()
@@ -172,6 +177,7 @@ def _user_prompt(
 
     technology_section = _banner_section("Detected technology", detected_technology_text)
     seo_section = _banner_section("Site SEO audit", detected_seo_text)
+    visual_section = _banner_section("Site visual audit", detected_visual_text)
 
     return (
         f"Target URL: {fetch.final_url or fetch.url}\n"
@@ -184,6 +190,7 @@ def _user_prompt(
         f"{html_snippet}\n"
         f"{technology_section}"
         f"{seo_section}"
+        f"{visual_section}"
     )
 
 
@@ -193,12 +200,14 @@ def _user_prompt_merged(
     contact_clues: list[str],
     detected_technology_text: Optional[str] = None,
     detected_seo_text: Optional[str] = None,
+    detected_visual_text: Optional[str] = None,
 ) -> str:
     merged = (merged_text or "").strip()[:90_000]
     clues = "\n".join(contact_clues) if contact_clues else "None"
 
     technology_section = _banner_section("Detected technology", detected_technology_text)
     seo_section = _banner_section("Site SEO audit", detected_seo_text)
+    visual_section = _banner_section("Site visual audit", detected_visual_text)
 
     return (
         f"Target URL: {source_url}\n"
@@ -212,6 +221,7 @@ def _user_prompt_merged(
         f"{clues}\n"
         f"{technology_section}"
         f"{seo_section}"
+        f"{visual_section}"
     )
 
 

@@ -131,3 +131,71 @@ def _extract_output_text(payload: dict[str, Any]) -> str:
 
     return ""
 
+
+def create_vision_response(
+    *,
+    images: list[str],
+    model: str,
+    prompt: str,
+    system_prompt: str = "",
+    max_tokens: int = 400,
+    timeout_s: int = 90,
+) -> dict[str, Any]:
+    """
+    Minimal multimodal call against the OpenAI Responses API (stdlib urllib).
+
+    ``images`` are base64-encoded JPEG data URLs. The model's output is parsed
+    as strict JSON and returned as a dict; unparseable output yields an empty
+    dict so callers can degrade gracefully.
+    """
+    user_content: list[dict[str, Any]] = [
+        {"type": "input_text", "text": prompt},
+    ]
+    for encoded in images:
+        user_content.append(
+            {"type": "input_image", "image_url": f"data:image/jpeg;base64,{encoded}"}
+        )
+
+    input_parts: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
+    if system_prompt.strip():
+        input_parts.insert(
+            0,
+            {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+        )
+
+    url = f"{_base_url()}/v1/responses"
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": input_parts,
+        "max_output_tokens": int(max_tokens),
+        "temperature": 0.2,
+    }
+    data = json.dumps(payload).encode("utf-8")
+
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {_api_key()}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            parsed = json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+        raise OpenAIHTTPError(getattr(exc, "code", 0) or 0, body[:2000]) from exc
+
+    output_text = _extract_output_text(parsed)
+    if not output_text.strip():
+        return {}
+    try:
+        value = json.loads(output_text)
+        return value if isinstance(value, dict) else {}
+    except ValueError:
+        return {}
+

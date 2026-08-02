@@ -12,6 +12,7 @@ from src.scoring.dimensions import (
     seo_health,
     technical_health,
     trust_professionalism,
+    visual_presentation,
 )
 
 # Dimensions whose reasons are only "no signal at all" notes are treated as
@@ -27,6 +28,7 @@ AVAILABILITY_NOTES = {
     "No technical signals available",
     "No trust signals available",
     "Limited outreach signals available",
+    "No visual evidence available",
 }
 
 
@@ -48,6 +50,7 @@ def score_site_lead(
         seo_health(inputs, config),
         content_strength(inputs, config),
         trust_professionalism(inputs, config),
+        visual_presentation(inputs, config),
     ]
     dimension_scores = {result.name: result.score for result in base}
 
@@ -72,11 +75,14 @@ def score_site_lead(
     positive, negative = _split_reasons(base, dimension_scores)
     positive = positive[: config.top_reasons_max]
     negative = negative[: config.top_reasons_max]
+    visual_result = next(result for result in base if result.name == "visual_presentation")
     angle = _outreach_angle(
         final_score=final_score,
         contactable_score=dimension_scores["contactability"],
         seo_score=dimension_scores["seo_health"],
         tech_score=dimension_scores["technical_health"],
+        visual_score=dimension_scores["visual_presentation"],
+        visual_evidence=_is_applicable(visual_result),
         has_website=bool((inputs.website_url or "").strip()),
         positive_reasons=positive,
         max_reasons=config.top_reasons_max,
@@ -139,13 +145,13 @@ def _outreach_angle(
     contactable_score: int,
     seo_score: int,
     tech_score: int,
+    visual_score: int,
+    visual_evidence: bool,
     has_website: bool,
     positive_reasons: list[str],
     max_reasons: int,
 ) -> str:
     """Deterministic, template-based outreach recommendation (never LLM)."""
-    top = ", ".join(positive_reasons[:max_reasons]) if positive_reasons else "no strong signals"
-
     if not has_website:
         if contactable_score >= 50:
             return (
@@ -155,6 +161,13 @@ def _outreach_angle(
         return (
             "No website found and limited contact channels. "
             "Try to establish contact first, then position a starter website."
+        )
+
+    if visual_evidence and visual_score < 40:
+        return (
+            f"Clear visual redesign opportunity: the site's presentation scored "
+            f"{visual_score}/100. Offer a homepage/design refresh with concrete "
+            "before/after improvements."
         )
 
     if seo_score < 50 or tech_score < 50:

@@ -29,6 +29,8 @@ from src.opportunities.rules import (
     platform,
     responsive_framework_detected,
     seo_audit,
+    visual_audit,
+    visual_int,
 )
 from src.scoring.base import LeadScore, ScoringInputs
 from src.scoring.rules import is_https_url
@@ -73,6 +75,20 @@ def detect_website_redesign(
     if duplicates > 0:
         points += config.redesign_duplicate_titles_points
         evidence.append(f"{duplicates} page(s) share duplicate title tags")
+
+    va = visual_audit(signals)
+    clutter = visual_int(va, "pages_with_clutter_signal")
+    if clutter > 0:
+        points += config.redesign_clutter_points
+        evidence.append(f"{clutter} page(s) show cluttered layouts")
+    hierarchy = visual_int(va, "pages_with_weak_hierarchy_signal")
+    if hierarchy > 0:
+        points += config.redesign_weak_hierarchy_points
+        evidence.append(f"{hierarchy} page(s) lack clear visual hierarchy")
+
+    if visual_int(va, "pages_with_modern_design_signal") > 0:
+        points -= config.redesign_strong_design_offset
+        evidence.append("Modern visual design present (reduces redesign urgency)")
 
     return build_opportunity("website_redesign", points, evidence, config)
 
@@ -272,6 +288,11 @@ def detect_brand_refresh(
         points += config.brand_thin_points
         evidence.append("Thin content contributes to a weak brand impression")
 
+    va = visual_audit(signals)
+    if visual_int(va, "total_pages_audited") > 0 and visual_int(va, "pages_with_strong_brand_signal") == 0:
+        points += config.brand_no_visual_identity_points
+        evidence.append("No strong visual brand identity detected across pages")
+
     return build_opportunity("brand_refresh", points, evidence, config)
 
 
@@ -334,6 +355,12 @@ def detect_mobile_optimization(
     if complexity(signals) == "basic":
         points += config.mobile_basic_points
         evidence.append("Basic site likely lacks dedicated mobile layouts")
+
+    va = visual_audit(signals)
+    weak_mobile = visual_int(va, "pages_with_weak_mobile_signal")
+    if weak_mobile > 0:
+        points += config.mobile_weak_layout_points
+        evidence.append(f"{weak_mobile} page(s) show weak mobile layouts (overflow/cramped)")
 
     return build_opportunity("mobile_optimization", points, evidence, config)
 
@@ -480,6 +507,12 @@ def detect_conversion_optimization(
     if complexity(signals) == "basic":
         points += config.cro_basic_points
         evidence.append("Basic site lacks structured conversion paths")
+
+    va = visual_audit(signals)
+    weak_cta = visual_int(va, "pages_with_weak_cta_signal")
+    if weak_cta > 0:
+        points += config.cro_weak_cta_points
+        evidence.append(f"{weak_cta} page(s) with weak or missing call-to-action")
 
     return build_opportunity("conversion_optimization", points, evidence, config)
 

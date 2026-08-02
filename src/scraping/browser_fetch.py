@@ -18,6 +18,17 @@ class FetchResult:
     cookies: Optional[list[dict]] = None
 
 
+@dataclass(frozen=True)
+class ScreenshotResult:
+    url: str
+    final_url: Optional[str]
+    width: int
+    height: int
+    full_page: bool
+    probe: dict
+    error: Optional[str] = None
+
+
 def _limit_chars(value: str, max_chars: int) -> str:
     if max_chars <= 0:
         return ""
@@ -131,6 +142,99 @@ class PlaywrightFetcher:
                 status=None,
                 html=None,
                 text=None,
+                error=str(exc),
+            )
+        finally:
+            await page.close()
+            await context.close()
+
+    async def screenshot(
+        self,
+        url: str,
+        output_path: str,
+        *,
+        width: int = 1365,
+        height: int = 900,
+        max_full_height: int = 12_000,
+        timeout_ms: int = 20_000,
+    ) -> Optional[ScreenshotResult]:
+        """
+        Capture a rendered screenshot at a fixed viewport size.
+
+        Navigates with wait_until="load" (shorter timeout than fetch), runs a
+        lightweight JS probe (viewport, overflow, CTA counts, body background),
+        then saves a full-page PNG when the page is not taller than
+        max_full_height, otherwise a viewport-only PNG. Returns None on any
+        failure so the visual audit never breaks the pipeline.
+        """
+        if self._browser is None:
+            raise RuntimeError("PlaywrightFetcher must be used as an async context manager")
+
+        context = await self._browser.new_context(
+            viewport={"width": width, "height": height},
+            device_scale_factor=1,
+        )
+        page = await context.new_page()
+
+        try:
+            response = await page.goto(url, wait_until="load", timeout=timeout_ms)
+            final_url = page.url
+
+            probe: dict = {}
+            try:
+                probe = await page.evaluate(
+                    """() => {
+                        const w = window;
+                        const doc = document.documentElement;
+                        const body = document.body;
+                        const bgOf = (el) => el ? w.getComputedStyle(el).backgroundColor : '';
+                        const bodyBg = bgOf(body) || bgOf(doc) || '';
+                        const cta = Array.from(doc.querySelectorAll('button, a')).filter((el) => {
+                            const cls = (el.className && String(el.className)) || '';
+                            const txt = (el.textContent || '').trim().toLowerCase();
+                            return /btn|cta|button/i.test(cls)
+                                || /(get started|start|book|contact|call|quote|learn more|schedule|order|buy|request)/i.test(txt);
+                        }).length;
+                        return {
+                            inner_width: w.innerWidth,
+                            inner_height: w.innerHeight,
+                            scroll_width: doc.scrollWidth,
+                            scroll_height: doc.scrollHeight,
+                            horizontal_overflow: doc.scrollWidth > w.innerWidth + 1,
+                            cta_count: cta,
+                            tel_links: doc.querySelectorAll('a[href^="tel:"]').length,
+                            mailto_links: doc.querySelectorAll('a[href^="mailto:"]').length,
+                            body_bg: bodyBg,
+                        };
+                    }"""
+                )
+            except Exception:
+                probe = {}
+
+            scroll_height = int(probe.get("scroll_height") or 0)
+            full_page = scroll_height <= max_full_height
+
+            if full_page:
+                await page.screenshot(path=output_path, full_page=True)
+            else:
+                await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": width, "height": height})
+
+            return ScreenshotResult(
+                url=url,
+                final_url=final_url,
+                width=width,
+                height=height,
+                full_page=full_page,
+                probe=probe,
+            )
+        except Exception as exc:
+            return ScreenshotResult(
+                url=url,
+                final_url=None,
+                width=width,
+                height=height,
+                full_page=False,
+                probe={},
                 error=str(exc),
             )
         finally:

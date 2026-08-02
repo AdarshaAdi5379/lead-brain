@@ -43,6 +43,7 @@ from src.settings import (
     FINGERPRINT_MIN_OVERRIDE_CONFIDENCE,
     SEO_BLEND_WEIGHT,
 )
+import src.settings as settings_module
 from src.storage.db import connect, init_db
 from src.storage.leads import LeadUpsert, upsert_lead
 from src.storage.normalization import normalize_url_for_dedupe
@@ -56,7 +57,13 @@ from src.storage.scores import scores_for_run as lead_scores_for_run
 from src.storage.seo import audits_for_run as seo_audits_for_run
 from src.storage.seo import replace_audit as replace_seo_audit
 from src.storage.technologies import detections_for_run, get_lead_id_by_url, replace_detections
+from src.storage.visual import audits_for_run as visual_audits_for_run
+from src.storage.visual import replace_visual_audit
 from src.url_loader import SeedRow, load_seed_csv
+from src.visual import run_visual_audit
+from src.visual.config import from_settings as visual_config_from_settings
+from src.visual.report import csv_fields_from_row as visual_csv_fields_from_row
+from src.visual.report import to_llm_text as visual_to_llm_text
 
 
 EXPORT_COLUMNS = [
@@ -108,6 +115,14 @@ EXPORT_COLUMNS = [
     "business_impact",
     "implementation_effort",
     "opportunity_count",
+    "visual_score",
+    "visual_health_label",
+    "visual_summary",
+    "pages_with_weak_mobile_signal",
+    "pages_with_clutter_signal",
+    "pages_with_weak_cta_signal",
+    "pages_with_strong_brand_signal",
+    "pages_with_weak_hierarchy_signal",
 ]
 
 
@@ -438,6 +453,42 @@ def _run_seeds(
                 except Exception as exc:  # audit must never break the pipeline
                     logger.debug("SEO audit failed for %s: %s", seed.url, exc)
 
+                # Local visual website audit: bounded screenshots + deterministic
+                # computer-vision-lite heuristics (no LLM unless VISUAL_LLM_ENABLED).
+                # The neutral banner text reaches the LLM as context only.
+                visual_audit = None
+                visual_text: Optional[str] = None
+                visual_config = visual_config_from_settings(settings_module)
+                try:
+                    if visual_config.enabled and fetch.success:
+                        visual_audit = await run_visual_audit(
+                            fetcher,
+                            seed.url,
+                            _crawl_summary(crawl),
+                            (
+                                [d.to_dict() for d in fingerprint.detections]
+                                if fingerprint and fingerprint.detections
+                                else []
+                            ),
+                            visual_config,
+                            page_context=_visual_page_context(seed, crawl, seo_audit),
+                        )
+                        visual_text = (
+                            visual_to_llm_text(visual_audit)
+                            if visual_audit is not None
+                            else None
+                        )
+                        if visual_audit is not None:
+                            logger.info(
+                                "Visual audit for %s: %d/100 (%s, %d pages)",
+                                seed.url,
+                                visual_audit.visual_score,
+                                visual_audit.visual_health_label,
+                                visual_audit.total_pages_audited,
+                            )
+                except Exception as exc:  # audit must never break the pipeline
+                    logger.debug("Visual audit failed for %s: %s", seed.url, exc)
+
                 if crawl is not None and crawl.ok and crawl.merged_text.strip():
                     logger.info(
                         "Sending merged content (%d chars, %d pages) to LLM for %s",
@@ -446,7 +497,11 @@ def _run_seeds(
                         seed.url,
                     )
                     extracted = _extract_from_crawl(
-                        seed, crawl, fingerprint=fingerprint, detected_seo_text=seo_text
+                        seed,
+                        crawl,
+                        fingerprint=fingerprint,
+                        detected_seo_text=seo_text,
+                        detected_visual_text=visual_text,
                     )
                 else:
                     logger.info(
@@ -454,7 +509,11 @@ def _run_seeds(
                         seed.url,
                     )
                     extracted = _extract_from_fetch(
-                        seed, fetch, fingerprint=fingerprint, detected_seo_text=seo_text
+                        seed,
+                        fetch,
+                        fingerprint=fingerprint,
+                        detected_seo_text=seo_text,
+                        detected_visual_text=visual_text,
                     )
 
                 if platform_override:
@@ -481,6 +540,9 @@ def _run_seeds(
                     ),
                     crawl=_crawl_summary(crawl),
                     seo_audit=seo_audit.to_dict() if seo_audit is not None else None,
+                    visual_audit=(
+                        visual_audit.to_dict() if visual_audit is not None else None
+                    ),
                 )
                 lead_score = None
                 try:
@@ -566,6 +628,17 @@ def _run_seeds(
                             replace_seo_audit(connection, lead_id, site_dict, page_dicts)
                     except Exception as exc:
                         logger.debug("Could not persist SEO audit for %s: %s", seed.url, exc)
+
+                if visual_audit is not None:
+                    try:
+                        normalized = normalize_url_for_dedupe(seed.url) if seed.url else ""
+                        lead_id = get_lead_id_by_url(connection, normalized) if normalized else None
+                        if lead_id is not None:
+                            site_dict = visual_audit.to_dict()
+                            page_dicts = site_dict.pop("pages")
+                            replace_visual_audit(connection, lead_id, site_dict, page_dicts)
+                    except Exception as exc:
+                        logger.debug("Could not persist visual audit for %s: %s", seed.url, exc)
 
                 if lead_score is not None:
                     try:
@@ -769,6 +842,36 @@ def _crawl_summary(crawl: Optional[CrawlResult]) -> Optional[dict]:
     }
 
 
+def _visual_page_context(
+    seed: SeedRow,
+    crawl: Optional[CrawlResult],
+    seo_audit,
+) -> dict[str, dict]:
+    """Map page URL -> text-derived signals for the visual audit.
+
+    Combines SEO audit per-page signals (word_count, image_count) with crawl
+    page titles so the visual heuristics can enrich pixel-only evidence without
+    any extra network access. Best-effort: unknown URLs simply get no context
+    and the associated signal degrades gracefully.
+    """
+    context: dict[str, dict] = {}
+    if seo_audit is not None:
+        for page in seo_audit.pages:
+            context[page.url] = {
+                "word_count": int(page.word_count or 0),
+                "image_count": int(page.image_count or 0),
+            }
+    if crawl is not None and crawl.pages:
+        for crawl_page in crawl.pages:
+            entry = context.setdefault(crawl_page.url, {})
+            entry.setdefault("title", crawl_page.title)
+            if crawl_page.text:
+                entry.setdefault("word_count", len(crawl_page.text.split()))
+    if seed.url and seed.url not in context and crawl is not None and crawl.pages:
+        context[seed.url] = context.get(crawl.pages[0].url, {})
+    return context
+
+
 def _fallback_lead_score(fallback) -> "LeadScore":
     """Convert the legacy ScoreResult into a LeadScore for the columns.
 
@@ -793,6 +896,7 @@ def _extract_from_fetch(
     fetch,
     fingerprint: Optional[FingerprintResult] = None,
     detected_seo_text: Optional[str] = None,
+    detected_visual_text: Optional[str] = None,
 ) -> dict:
     if not fetch.success:
         # Loggable error text is stored in last_error.
@@ -815,6 +919,7 @@ def _extract_from_fetch(
             fetch,
             detected_technology_text=_tech_banner(fingerprint),
             detected_seo_text=detected_seo_text,
+            detected_visual_text=detected_visual_text,
         )
         payload = result.lead.to_dict()
         # Attach usage for cost tracking without storing it in DB.
@@ -843,6 +948,7 @@ def _extract_from_crawl(
     crawl: CrawlResult,
     fingerprint: Optional[FingerprintResult] = None,
     detected_seo_text: Optional[str] = None,
+    detected_visual_text: Optional[str] = None,
 ) -> dict:
     try:
         result = extract_lead_from_merged_content(
@@ -851,6 +957,7 @@ def _extract_from_crawl(
             contact_clues=list(crawl.contact_clues),
             detected_technology_text=_tech_banner(fingerprint),
             detected_seo_text=detected_seo_text,
+            detected_visual_text=detected_visual_text,
         )
         payload = result.lead.to_dict()
         # Attach usage to the payload for cost tracking without storing it in DB.
@@ -932,6 +1039,11 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
     for row in lead_opportunities_for_run(connection, run_id):
         opportunities_by_lead.setdefault(int(row["lead_id"]), []).append(row)
 
+    # Merge per-lead site-level visual audit summaries.
+    visual_by_lead: dict[int, dict] = {
+        int(row["lead_id"]): row for row in visual_audits_for_run(connection, run_id)
+    }
+
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS)
         writer.writeheader()
@@ -983,6 +1095,14 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
             record["business_impact"] = ""
             record["implementation_effort"] = ""
             record["opportunity_count"] = ""
+            record["visual_score"] = ""
+            record["visual_health_label"] = ""
+            record["visual_summary"] = ""
+            record["pages_with_weak_mobile_signal"] = ""
+            record["pages_with_clutter_signal"] = ""
+            record["pages_with_weak_cta_signal"] = ""
+            record["pages_with_strong_brand_signal"] = ""
+            record["pages_with_weak_hierarchy_signal"] = ""
             # Match the lead by its normalized URL (as stored by upsert).
             normalized = record.get("website_url") or ""
             lead_id = lead_id_by_normalized.get(normalize_url_for_dedupe(normalized))
@@ -1001,6 +1121,10 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
                 opportunity_rows = opportunities_by_lead.get(lead_id)
                 if opportunity_rows:
                     for key, value in opportunity_csv_fields_from_rows(opportunity_rows).items():
+                        record[key] = value
+                visual_row = visual_by_lead.get(lead_id)
+                if visual_row is not None:
+                    for key, value in visual_csv_fields_from_row(visual_row).items():
                         record[key] = value
             writer.writerow({k: record.get(k) for k in EXPORT_COLUMNS})
 

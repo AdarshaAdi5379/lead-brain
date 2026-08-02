@@ -347,3 +347,50 @@ def outreach_potential(
         reasons.append("Limited outreach signals available")
 
     return DimensionResult(name="outreach_potential", score=clamp(points), reasons=tuple(reasons))
+
+
+def visual_presentation(
+    inputs: ScoringInputs, config: Optional[ScoringConfig] = None
+) -> DimensionResult:
+    config = config or default_config()
+    """Deterministic screenshot audit results (or explicit unknowns)."""
+    if not has_text(inputs.website_url):
+        return DimensionResult(
+            name="visual_presentation",
+            score=config.visual_no_website_score,
+            reasons=("No website to audit",),
+        )
+
+    audit = inputs.visual_audit
+    if not audit:
+        return DimensionResult(
+            name="visual_presentation",
+            score=config.visual_unverifiable_score,
+            reasons=("No visual evidence available",),
+        )
+
+    reasons: list[str] = []
+    points = clamp(as_int(audit.get("visual_score")))
+    reasons.append(
+        f"Deterministic visual presentation score: {points}/100 "
+        f"({safe_str(audit.get('visual_health_label'))})"
+    )
+
+    def _counted(key: str, penalty: int, label: str, sign: int = -1) -> None:
+        nonlocal points
+        count = as_int(audit.get(key))
+        if count <= 0:
+            return
+        points = clamp(points + sign * penalty)
+        reasons.append(
+            f"{label} on {count} page(s) ({'-' if sign < 0 else '+'}{penalty})"
+        )
+
+    _counted("pages_with_weak_mobile_signal", config.visual_weak_mobile_penalty, "Weak mobile layout")
+    _counted("pages_with_clutter_signal", config.visual_clutter_penalty, "Cluttered layout")
+    _counted("pages_with_weak_cta_signal", config.visual_weak_cta_penalty, "Weak call-to-action")
+    _counted("pages_with_weak_hierarchy_signal", config.visual_weak_hierarchy_penalty, "Weak hierarchy")
+    _counted("pages_with_strong_brand_signal", config.visual_strong_brand_bonus, "Strong branding", sign=1)
+    _counted("pages_with_modern_design_signal", config.visual_modern_bonus, "Modern design", sign=1)
+
+    return DimensionResult(name="visual_presentation", score=clamp(points), reasons=tuple(reasons))

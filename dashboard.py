@@ -15,6 +15,8 @@ from src.storage.scores import scores_by_lead as lead_scores_by_lead
 from src.storage.seo import audits_by_lead as seo_audits_by_lead
 from src.storage.seo import page_audits_for_audit
 from src.storage.technologies import detections_by_lead
+from src.storage.visual import audits_by_lead as visual_audits_by_lead
+from src.storage.visual import page_audits_for_audit as visual_page_audits_for_audit
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -75,6 +77,7 @@ def main() -> None:
     total_db_leads = 0
     tech_by_lead: dict[int, list[dict[str, Any]]] = {}
     seo_by_lead: dict[int, dict[str, Any]] = {}
+    visual_by_lead: dict[int, dict[str, Any]] = {}
     score_by_lead: dict[int, dict[str, Any]] = {}
     opp_by_lead: dict[int, list[dict[str, Any]]] = {}
     with _connect(db_path) as connection:
@@ -83,6 +86,7 @@ def main() -> None:
         total_db_leads = len(all_rows)
         tech_by_lead = detections_by_lead(connection)
         seo_by_lead = seo_audits_by_lead(connection)
+        visual_by_lead = visual_audits_by_lead(connection)
         score_by_lead = lead_scores_by_lead(connection)
         opp_by_lead = lead_opportunities_by_lead(connection)
 
@@ -138,6 +142,19 @@ def main() -> None:
         key="seo_health_filter",
     )
     min_seo_score = int(st.sidebar.slider("Min site SEO score", 0, 100, 0, key="min_seo_score"))
+
+    st.sidebar.subheader("Visual filters")
+    visual_health_filter = st.sidebar.multiselect(
+        "Visual health",
+        options=["Excellent", "Good", "Fair", "Poor", "Critical"],
+        default=[],
+        key="visual_health_filter",
+    )
+    min_visual_score = int(st.sidebar.slider("Min visual score", 0, 100, 0, key="min_visual_score"))
+    visual_weak_mobile = st.sidebar.checkbox("Weak mobile layout", key="visual_weak_mobile")
+    visual_clutter = st.sidebar.checkbox("Cluttered layout", key="visual_clutter")
+    visual_weak_cta = st.sidebar.checkbox("Weak call-to-action", key="visual_weak_cta")
+    visual_strong_brand = st.sidebar.checkbox("Strong branding", key="visual_strong_brand")
 
     st.sidebar.subheader("Opportunity filters")
     opp_category_filter = st.sidebar.multiselect(
@@ -207,6 +224,30 @@ def main() -> None:
             return False
         return True
 
+    visual_signal_flags = {
+        "pages_with_weak_mobile_signal": visual_weak_mobile,
+        "pages_with_clutter_signal": visual_clutter,
+        "pages_with_weak_cta_signal": visual_weak_cta,
+        "pages_with_strong_brand_signal": visual_strong_brand,
+    }
+
+    def _has_visual(lead_id: int) -> bool:
+        visual = visual_by_lead.get(lead_id)
+        if not visual:
+            return not (
+                visual_health_filter
+                or min_visual_score > 0
+                or any(visual_signal_flags.values())
+            )
+        if visual_health_filter and str(visual.get("visual_health_label")) not in set(visual_health_filter):
+            return False
+        if int(visual.get("visual_score") or 0) < min_visual_score:
+            return False
+        for field, flag in visual_signal_flags.items():
+            if flag and int(visual.get(field) or 0) == 0:
+                return False
+        return True
+
     def _opportunity_summary(lead_id: int) -> tuple[Optional[str], int, Optional[str]]:
         opportunities = opp_by_lead.get(lead_id) or []
         top = opportunities[0] if opportunities else None
@@ -252,6 +293,7 @@ def main() -> None:
         and (not priority_filter or (row.priority in set(priority_filter)))
         and _has_tech(row.id, tech_filter)
         and _has_seo(row.id)
+        and _has_visual(row.id)
         and _has_opportunity(row.id)
     ]
     if priority_label_filter:
@@ -320,6 +362,8 @@ def main() -> None:
             ),
             "seo_score": seo_by_lead.get(r.id, {}).get("site_score"),
             "seo_health": seo_by_lead.get(r.id, {}).get("overall_health"),
+            "visual_score": visual_by_lead.get(r.id, {}).get("visual_score"),
+            "visual_health": visual_by_lead.get(r.id, {}).get("visual_health_label"),
             "top_opportunity": _opportunity_summary(r.id)[0],
             "opportunity_score": _opportunity_summary(r.id)[1],
             "opportunity_priority": _opportunity_summary(r.id)[2],
@@ -346,6 +390,8 @@ def main() -> None:
             "technologies",
             "seo_score",
             "seo_health",
+            "visual_score",
+            "visual_health",
             "top_opportunity",
             "opportunity_score",
             "opportunity_priority",
@@ -418,6 +464,8 @@ def main() -> None:
         _render_scoring_section(score_by_lead.get(selected.id))
 
         _render_seo_section(db_path, selected.id, seo_by_lead, page_issue_filters)
+
+        _render_visual_section(db_path, selected.id, visual_by_lead)
 
         st.markdown("### Lead actions")
         sent = st.checkbox("Outreach sent", value=bool(selected.outreach_sent), key=f"sent_{selected.id}")
@@ -564,6 +612,7 @@ def _render_scoring_section(score_row: Optional[dict[str, Any]]) -> None:
         ("Trust / professionalism", "trust_professionalism_score", int(score_row.get("trust_professionalism_score") or 0)),
         ("Discovery quality", "discovery_quality_score", int(score_row.get("discovery_quality_score") or 0)),
         ("Outreach potential", "outreach_potential_score", int(score_row.get("outreach_potential_score") or 0)),
+        ("Visual presentation", "visual_presentation_score", int(score_row.get("visual_presentation_score") or 0)),
     ]
     for label, _, value in dimension_scores:
         st.progress(value / 100.0, text=f"{label}: {value}/100")
@@ -669,6 +718,80 @@ def _render_seo_section(
                 for issue in issues[:8]:
                     st.markdown(f"- **{issue.get('severity')}** — {issue.get('reason')}")
                     st.caption(f"Fix: {issue.get('fix')}")
+
+
+def _render_visual_section(
+    db_path: Path,
+    lead_id: int,
+    visual_by_lead: dict[int, dict[str, Any]],
+) -> None:
+    st.markdown("### Visual website audit")
+    visual = visual_by_lead.get(lead_id)
+    if not visual:
+        st.caption("No visual audit stored for this lead.")
+        return
+
+    col_score, col_health, col_pages = st.columns(3)
+    col_score.metric("Visual score", f"{visual.get('visual_score')}/100")
+    col_health.metric("Health", str(visual.get("visual_health_label") or "—"))
+    col_pages.metric("Pages audited", str(visual.get("total_pages_audited") or 0))
+
+    summary = visual.get("summary")
+    if summary:
+        st.markdown("**Summary**")
+        st.write(str(summary))
+
+    connection = _connect(db_path)
+    try:
+        page_rows = visual_page_audits_for_audit(connection, int(visual["id"]))
+    finally:
+        connection.close()
+    if not page_rows:
+        st.caption("No per-page visual audits stored.")
+        return
+
+    issues = [issue for page in page_rows for issue in (page.get("issues") or [])]
+    strengths = [strength for page in page_rows for strength in (page.get("strengths") or [])]
+
+    if issues:
+        st.markdown("**Top visual issues**")
+        for issue in issues[:5]:
+            st.markdown(f"- {issue}")
+    else:
+        st.caption("No visual issues detected.")
+
+    if strengths:
+        st.markdown("**Observed strengths**")
+        for strength in strengths[:5]:
+            st.markdown(f"- {strength}")
+
+    with st.expander(f"Page breakdown ({len(page_rows)})", expanded=True):
+        display = [
+            {
+                "url": page.get("url"),
+                "page_type": page.get("page_type"),
+                "visual_score": page.get("visual_score"),
+                "layout": page.get("layout_quality"),
+                "readability": page.get("readability_quality"),
+                "branding": page.get("branding_quality"),
+                "mobile": page.get("mobile_quality"),
+                "conversion": page.get("conversion_quality"),
+                "issues": len(page.get("issues") or []),
+                "strengths": len(page.get("strengths") or []),
+            }
+            for page in page_rows
+        ]
+        if pd is not None:
+            st.dataframe(pd.DataFrame(display), use_container_width=True, hide_index=True)
+        else:
+            st.dataframe(display, use_container_width=True)
+
+        for page in page_rows:
+            screenshot = page.get("screenshot_path") or page.get("mobile_screenshot_path")
+            if not screenshot or not Path(str(screenshot)).exists():
+                continue
+            with st.expander(f"Screenshot: {page.get('url')}"):
+                st.image(str(screenshot), use_container_width=True, caption=f"Visual score {page.get('visual_score')}/100")
 
 
 def _passes_page_filters(page: dict[str, Any], filters: dict[str, bool]) -> bool:

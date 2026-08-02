@@ -75,3 +75,20 @@ SEO_PAGE_HTML_MAX_CHARS: int = int(os.environ.get("SEO_PAGE_HTML_MAX_CHARS", "15
 SEO_PROBE_ROBOTS: bool = os.environ.get("SEO_PROBE_ROBOTS", "").strip().lower() in {"1", "true", "yes", "on"}
 # Weight of the site SEO score when blending into the lead score.
 SEO_BLEND_WEIGHT: float = float(os.environ.get("SEO_BLEND_WEIGHT", "0.15"))
+
+# Local visual website audit (Phase 13). Screenshots + deterministic
+# computer-vision-lite heuristics; optional multimodal LLM summarizer.
+# Master switch: when off, the visual stage is skipped entirely.
+VISUAL_ENABLED: bool = os.environ.get("VISUAL_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+# When set, existing screenshots are re-captured instead of reused.
+VISUAL_RECAPTURE: bool = os.environ.get("VISUAL_RECAPTURE", "").strip().lower() in {"1", "true", "yes", "on"}
+# Capture viewports (width x height) for the desktop and mobile variants.
+VISUAL_VIEWPORT_DESKTOP: str = os.environ.get("VISUAL_VIEWPORT_DESKTOP", "1365x900")
+VISUAL_VIEWPORT_MOBILE: str = os.environ.get("VISUAL_VIEWPORT_MOBILE", "390x844")
+# Full-page screenshots taller than this (px) are downgraded to viewport-only.
+VISUAL_FULLPAGE_MAX_HEIGHT: int = int(os.environ.get("VISUAL_FULLPAGE_MAX_HEIGHT", "12000"))
+# Screenshot directory (data/ is gitignored; paths are hash-based).
+VISUAL_SCREENSHOT_DIR: Path = PROJECT_ROOT / os.environ.get("VISUAL_SCREENSHOT_DIR", "data/screenshots")
+# Optional multimodal summarizer (gated: off by default, no API key needed).
+VISUAL_LLM_ENABLED: bool = os.environ.get("VISUAL_LLM_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+VISUAL_LLM_MODEL: str = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")

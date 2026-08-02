@@ -45,9 +45,13 @@ class OpportunityConfig:
     redesign_low_seo_points: int = 20
     redesign_low_content_points: int = 10
     redesign_duplicate_titles_points: int = 5
+    redesign_clutter_points: int = 15
+    redesign_weak_hierarchy_points: int = 10
     redesign_low_trust_threshold: int = 50
     redesign_low_seo_threshold: int = 40
     redesign_low_content_threshold: int = 50
+    # Strong visual design reduces redesign urgency (subtracted from the points).
+    redesign_strong_design_offset: int = 10
 
     # --- seo_improvement ---
     seo_missing_title_each: int = 6
@@ -88,6 +92,7 @@ class OpportunityConfig:
     brand_legacy_points: int = 25
     brand_no_social_points: int = 15
     brand_thin_points: int = 10
+    brand_no_visual_identity_points: int = 15
     brand_low_trust_threshold: int = 50
 
     # --- technical_modernization ---
@@ -102,6 +107,7 @@ class OpportunityConfig:
     mobile_no_responsive_framework_points: int = 25
     mobile_slow_points: int = 15
     mobile_basic_points: int = 10
+    mobile_weak_layout_points: int = 20
 
     # --- analytics_setup ---
     analytics_missing_points: int = 60
@@ -130,6 +136,7 @@ class OpportunityConfig:
     cro_no_email_points: int = 20
     cro_thin_points: int = 15
     cro_basic_points: int = 15
+    cro_weak_cta_points: int = 15
 
     # --- hosting_upgrade ---
     hosting_slow_points: int = 40

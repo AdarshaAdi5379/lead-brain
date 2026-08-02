@@ -1,0 +1,435 @@
+{
+  "version": 1,
+  "description": "Deterministic website technology fingerprint database (lead-brain).",
+  "technologies": [
+    {
+      "name": "WordPress",
+      "category": "cms",
+      "signals": [
+        {"kind": "generator", "weight": 35, "pattern": "WordPress", "hint": "meta generator = WordPress"},
+        {"kind": "html", "weight": 20, "pattern": "wp-content/", "hint": "resources under /wp-content/"},
+        {"kind": "script", "weight": 20, "pattern": "wp-content/|wp-includes/", "hint": "script under /wp-"},
+        {"kind": "class", "weight": 10, "pattern": "^wp-", "hint": "body/container class wp-*"},
+        {"kind": "path", "weight": 30, "path": "/wp-login.php", "hint": "/wp-login.php responds"}
+      ]
+    },
+    {
+      "name": "Wix",
+      "category": "cms",
+      "signals": [
+        {"kind": "generator", "weight": 40, "pattern": "Wix", "hint": "meta generator = Wix"},
+        {"kind": "html", "weight": 25, "pattern": "wix\\.com", "hint": "reference to wix.com"},
+        {"kind": "script", "weight": 25, "pattern": "static\\.wixstatic\\.com|wix\\.com/scripts", "hint": "Wix static assets"}
+      ]
+    },
+    {
+      "name": "Squarespace",
+      "category": "cms",
+      "signals": [
+        {"kind": "generator", "weight": 40, "pattern": "Squarespace", "hint": "meta generator = Squarespace"},
+        {"kind": "script", "weight": 20, "pattern": "static[0-9]*\\.squarespace\\.com", "hint": "Squarespace static assets"},
+        {"kind": "html", "weight": 15, "pattern": "squarespace", "hint": "inline markup"}
+      ]
+    },
+    {
+      "name": "Shopify",
+      "category": "cms",
+      "signals": [
+        {"kind": "html", "weight": 30, "pattern": "cdn\\.shopify\\.com", "hint": "Shopify CDN"},
+        {"kind": "script", "weight": 20, "pattern": "cdn\\.shopify\\.com", "hint": "Shopify scripts"},
+        {"kind": "cookie", "weight": 25, "pattern": "_shopify_", "hint": "Shopify cookies"},
+        {"kind": "global", "weight": 20, "pattern": "Shopify\\.theme|ShopifyAnalytics", "hint": "global Shopify object"},
+        {"kind": "path", "weight": 30, "path": "/cart.js", "hint": "/cart.js reachable"}
+      ]
+    },
+    {
+      "name": "Webflow",
+      "category": "cms",
+      "signals": [
+        {"kind": "generator", "weight": 40, "pattern": "Webflow", "hint": "meta generator = Webflow"},
+        {"kind": "script", "weight": 20, "pattern": "webflow\\.js|assets\\.website-files\\.com", "hint": "Website-Files assets"}
+      ]
+    },
+    {
+      "name": "Ghost",
+      "category": "cms",
+      "signals": [
+        {"kind": "generator", "weight": 40, "pattern": "Ghost", "hint": "meta generator = Ghost"},
+        {"kind": "script", "weight": 20, "pattern": "ghost-portal|public/ghost-sdk", "hint": "Ghost scripts"}
+      ]
+    },
+    {
+      "name": "Drupal",
+      "category": "cms",
+      "signals": [
+        {"kind": "generator", "weight": 40, "pattern": "Drupal", "hint": "meta generator = Drupal"},
+        {"kind": "html", "weight": 15, "pattern": "/sites/default/files|/modules/custom", "hint": "Drupal file paths"}
+      ]
+    },
+    {
+      "name": "Joomla",
+      "category": "cms",
+      "signals": [
+        {"kind": "generator", "weight": 40, "pattern": "Joomla", "hint": "meta generator = Joomla"},
+        {"kind": "html", "weight": 15, "pattern": "/media/system/js/", "hint": "Joomla scripts"}
+      ]
+    },
+    {
+      "name": "Magento",
+      "category": "cms",
+      "signals": [
+        {"kind": "meta", "weight": 20, "target": "description|keywords", "pattern": "magento", "hint": "Magento in meta"},
+        {"kind": "global", "weight": 25, "pattern": "Magento\\.Cookie|mage/", "hint": "Magento global"},
+        {"kind": "html", "weight": 15, "pattern": "skin/frontend/|magento", "hint": "Magento paths"}
+      ]
+    },
+
+    {
+      "name": "Next.js",
+      "category": "frontend",
+      "signals": [
+        {"kind": "html", "weight": 30, "pattern": "__NEXT_DATA__|__next", "hint": "Next.js data payload"},
+        {"kind": "script", "weight": 25, "pattern": "/_next/static", "hint": "Next.js static assets"},
+        {"kind": "meta", "weight": 10, "target": "generator", "pattern": "Next\\.js", "hint": "meta generator = Next.js"}
+      ]
+    },
+    {
+      "name": "React",
+      "category": "frontend",
+      "signals": [
+        {"kind": "script", "weight": 25, "pattern": "react(\\.development|\\.production)?(\\.min)?\\.js", "hint": "react.js bundle"},
+        {"kind": "html", "weight": 20, "pattern": "data-reactroot|id=\"root\"|id='root'", "hint": "React mount point"},
+        {"kind": "global", "weight": 15, "pattern": "ReactDOM|react_roots", "hint": "React globals"}
+      ]
+    },
+    {
+      "name": "Vue",
+      "category": "frontend",
+      "signals": [
+        {"kind": "script", "weight": 30, "pattern": "vue(\\.runtime)?(\\.min)?\\.js", "hint": "vue.js bundle"},
+        {"kind": "global", "weight": 25, "pattern": "__VUE__|app\\.use\\(|createApp", "hint": "Vue globals"},
+        {"kind": "html", "weight": 15, "pattern": "data-v-", "hint": "Vue scoped attrs"}
+      ]
+    },
+    {
+      "name": "Nuxt",
+      "category": "frontend",
+      "signals": [
+        {"kind": "html", "weight": 35, "pattern": "__NUXT__", "hint": "Nuxt payload"},
+        {"kind": "meta", "weight": 15, "target": "generator", "pattern": "Nuxt|Vue", "hint": "Nuxt generator"}
+      ]
+    },
+    {
+      "name": "Angular",
+      "category": "frontend",
+      "signals": [
+        {"kind": "html", "weight": 30, "pattern": "ng-version|_nghost-|_ngcontent-", "hint": "Angular DOM markers"},
+        {"kind": "script", "weight": 20, "pattern": "zone\\.js|main\\.[a-f0-9]+\\.js", "hint": "Angular runtime"}
+      ]
+    },
+    {
+      "name": "Svelte",
+      "category": "frontend",
+      "signals": [
+        {"kind": "global", "weight": 30, "pattern": "svelteInternal|__svelte", "hint": "Svelte runtimes"},
+        {"kind": "html", "weight": 20, "pattern": "sveltekit|svelte-", "hint": "Svelte markup"}
+      ]
+    },
+    {
+      "name": "Astro",
+      "category": "frontend",
+      "signals": [
+        {"kind": "generator", "weight": 40, "pattern": "Astro", "hint": "meta generator = Astro"},
+        {"kind": "html", "weight": 15, "pattern": "astro-island", "hint": "Astro islands"}
+      ]
+    },
+    {
+      "name": "Remix",
+      "category": "frontend",
+      "signals": [
+        {"kind": "html", "weight": 35, "pattern": "__remixContext|remix-root", "hint": "Remix context"},
+        {"kind": "script", "weight": 20, "pattern": "/build/entry\\.client|@remix-run", "hint": "Remix bundles"}
+      ]
+    },
+    {
+      "name": "Gatsby",
+      "category": "frontend",
+      "signals": [
+        {"kind": "meta", "weight": 25, "target": "generator", "pattern": "Gatsby", "hint": "Gatsby generator"},
+        {"kind": "html", "weight": 25, "pattern": "___gatsby|gatsby-", "hint": "Gatsby site markers"}
+      ]
+    },
+    {
+      "name": "Bootstrap",
+      "category": "frontend",
+      "signals": [
+        {"kind": "script", "weight": 25, "pattern": "bootstrap(\\.bundle)?(\\.min)?\\.js", "hint": "bootstrap.js"},
+        {"kind": "style", "weight": 20, "pattern": "bootstrap(\\.min)?\\.css", "hint": "bootstrap.css"},
+        {"kind": "class", "weight": 15, "pattern": "^(container|row|col-md)", "hint": "Bootstrap grid classes"}
+      ]
+    },
+    {
+      "name": "Tailwind CSS",
+      "category": "frontend",
+      "signals": [
+        {"kind": "style", "weight": 25, "pattern": "tailwind(\\.min)?\\.css", "hint": "tailwind.css"},
+        {"kind": "html", "weight": 20, "pattern": "tailwind", "hint": "Tailwind CSS inline"},
+        {"kind": "class", "weight": 15, "pattern": "^(flex|grid|hidden|items-center|pxl-|py-)", "hint": "Tailwind utilities"}
+      ]
+    },
+
+    {
+      "name": "jQuery",
+      "category": "libraries",
+      "signals": [
+        {"kind": "script", "weight": 30, "pattern": "jquery(\\.min)?\\.js", "hint": "jQuery bundle"},
+        {"kind": "global", "weight": 15, "pattern": "\\$\\.(ajax|ready|core)", "hint": "jQuery usage"}
+      ]
+    },
+    {
+      "name": "Alpine.js",
+      "category": "libraries",
+      "signals": [
+        {"kind": "script", "weight": 30, "pattern": "alpine(\\.plugin)?(\\.min)?\\.js", "hint": "Alpine bundle"},
+        {"kind": "global", "weight": 20, "pattern": "Alpine\\.", "hint": "Alpine global"}
+      ]
+    },
+    {
+      "name": "HTMX",
+      "category": "libraries",
+      "signals": [
+        {"kind": "script", "weight": 30, "pattern": "htmx(\\.min)?\\.js|unpkg\\.com/htmx", "hint": "htmx bundle"},
+        {"kind": "html", "weight": 20, "pattern": "hx-(get|post|trigger|boost)", "hint": "htmx attributes"}
+      ]
+    },
+
+    {
+      "name": "Django",
+      "category": "backend",
+      "signals": [
+        {"kind": "cookie", "weight": 25, "pattern": "csrftoken", "hint": "Django CSRF cookie"},
+        {"kind": "html", "weight": 20, "pattern": "django|csrfmiddlewaretoken", "hint": "Django templates"}
+      ]
+    },
+    {
+      "name": "Laravel",
+      "category": "backend",
+      "signals": [
+        {"kind": "cookie", "weight": 30, "pattern": "laravel_session", "hint": "Laravel cookie"},
+        {"kind": "html", "weight": 15, "pattern": "laravel|csrf-middleware", "hint": "Laravel app"}
+      ]
+    },
+    {
+      "name": "Ruby on Rails",
+      "category": "backend",
+      "signals": [
+        {"kind": "global", "weight": 20, "pattern": "Rails\\.|turbo-", "hint": "Rails globals"},
+        {"kind": "html", "weight": 15, "pattern": "data-turbo|rails", "hint": "Rails-style app"}
+      ]
+    },
+    {
+      "name": "Express",
+      "category": "backend",
+      "signals": [
+        {"kind": "header", "weight": 30, "target": "x-powered-by", "pattern": "Express", "hint": "x-powered-by: Express"},
+        {"kind": "cookie", "weight": 15, "pattern": "connect\\.sid", "hint": "Express session cookie"}
+      ]
+    },
+    {
+      "name": "ASP.NET",
+      "category": "backend",
+      "signals": [
+        {"kind": "header", "weight": 30, "target": "x-powered-by", "pattern": "ASP\\.NET", "hint": "x-powered-by: ASP.NET"},
+        {"kind": "cookie", "weight": 15, "pattern": "__requestverificationtoken", "hint": "ASP.NET anti-forgery cookie"}
+      ]
+    },
+    {
+      "name": "Spring Boot",
+      "category": "backend",
+      "signals": [
+        {"kind": "header", "weight": 25, "target": "x-application-context", "pattern": "spring", "hint": "Spring headers"},
+        {"kind": "cookie", "weight": 20, "pattern": "jsessionid", "hint": "JSESSIONID cookie"}
+      ]
+    },
+    {
+      "name": "Flask",
+      "category": "backend",
+      "signals": [
+        {"kind": "cookie", "weight": 30, "pattern": "remember_token", "hint": "Flask session cookie"},
+        {"kind": "header", "weight": 25, "target": "x-powered-by", "pattern": "Flask|Werkzeug", "hint": "x-powered-by Flask"}
+      ]
+    },
+    {
+      "name": "PHP",
+      "category": "backend",
+      "signals": [
+        {"kind": "cookie", "weight": 20, "pattern": "phpsessid", "hint": "PHP session cookie"},
+        {"kind": "header", "weight": 25, "target": "x-powered-by", "pattern": "PHP", "hint": "x-powered-by: PHP"}
+      ]
+    },
+
+    {
+      "name": "Cloudflare",
+      "category": "hosting",
+      "signals": [
+        {"kind": "header", "weight": 35, "target": "server", "pattern": "cloudflare", "hint": "server: cloudflare"},
+        {"kind": "header", "weight": 20, "target": "cf-", "pattern": ".*", "hint": "CF-* headers present"},
+        {"kind": "cookie", "weight": 15, "pattern": "__cf_bm|cf_clearance", "hint": "Cloudflare cookie"}
+      ]
+    },
+    {
+      "name": "Netlify",
+      "category": "hosting",
+      "signals": [
+        {"kind": "header", "weight": 35, "target": "x-netlify-to|server", "pattern": "netlify|Netlify", "hint": "Netlify headers"},
+        {"kind": "html", "weight": 15, "pattern": "netlify", "hint": "Netlify markup"}
+      ]
+    },
+    {
+      "name": "Vercel",
+      "category": "hosting",
+      "signals": [
+        {"kind": "header", "weight": 35, "target": "x-vercel-", "pattern": ".*", "hint": "Vercel headers"},
+        {"kind": "html", "weight": 15, "pattern": "vercel", "hint": "Vercel markup"}
+      ]
+    },
+    {
+      "name": "AWS",
+      "category": "hosting",
+      "signals": [
+        {"kind": "header", "weight": 30, "target": "server", "pattern": "amazons3|amazon s3", "hint": "server: AmazonS3"},
+        {"kind": "header", "weight": 20, "target": "x-amz-", "pattern": ".*", "hint": "x-amz-*"},
+        {"kind": "html", "weight": 10, "pattern": "s3[.-].*\\.amazonaws\\.com|amazonaws\\.com", "hint": "S3 URLs"}
+      ]
+    },
+    {
+      "name": "Azure",
+      "category": "hosting",
+      "signals": [
+        {"kind": "header", "weight": 35, "target": "server|x-ms-request-id|azure", "pattern": "azure|Azure", "hint": "Azure signatures"}
+      ]
+    },
+    {
+      "name": "Firebase Hosting",
+      "category": "hosting",
+      "signals": [
+        {"kind": "header", "weight": 30, "target": "server|x-rev", "pattern": "firebase|html", "hint": "Firebase Hosting headers"},
+        {"kind": "html", "weight": 15, "pattern": "firebase", "hint": "Firebase markup"}
+      ]
+    },
+    {
+      "name": "CloudFront",
+      "category": "hosting",
+      "signals": [
+        {"kind": "header", "weight": 35, "target": "server", "pattern": "cloudfront|amazon cloudfront", "hint": "server: CloudFront"},
+        {"kind": "header", "weight": 20, "target": "x-cache", "pattern": "cloudfront", "hint": "x-cache: CloudFront"}
+      ]
+    },
+    {
+      "name": "Fastly",
+      "category": "hosting",
+      "signals": [
+        {"kind": "header", "weight": 40, "target": "x-served-by|x-surrogate", "pattern": "fastly", "hint": "Fastly headers"}
+      ]
+    },
+
+    {
+      "name": "Google Analytics",
+      "category": "analytics",
+      "signals": [
+        {"kind": "script", "weight": 30, "pattern": "google-analytics\\.com/analytics\\.js|googletagmanager\\.com/gtag/js", "hint": "GA/gtag snippet"},
+        {"kind": "global", "weight": 20, "pattern": "dataLayer", "hint": "GA globals"}
+      ]
+    },
+    {
+      "name": "Google Tag Manager",
+      "category": "analytics",
+      "signals": [
+        {"kind": "script", "weight": 35, "pattern": "googletagmanager\\.com/gtm\\.js", "hint": "GTM loader"}
+      ]
+    },
+    {
+      "name": "Facebook Pixel",
+      "category": "analytics",
+      "signals": [
+        {"kind": "script", "weight": 35, "pattern": "fbevents\\.js", "hint": "fbevents.js"},
+        {"kind": "global", "weight": 20, "pattern": "fbq\\s*\\(", "hint": "fbq() calls"}
+      ]
+    },
+    {
+      "name": "Hotjar",
+      "category": "analytics",
+      "signals": [
+        {"kind": "script", "weight": 35, "pattern": "hotjar\\.com/c/hotjar", "hint": "hotjar script"},
+        {"kind": "global", "weight": 20, "pattern": "_hjSettings", "hint": "Hotjar globals"}
+      ]
+    },
+    {
+      "name": "Microsoft Clarity",
+      "category": "analytics",
+      "signals": [
+        {"kind": "script", "weight": 35, "pattern": "clarity\\.ms/tag/", "hint": "Clarity tag"},
+        {"kind": "global", "weight": 15, "pattern": "clarity", "hint": "Clarity globals"}
+      ]
+    },
+
+    {
+      "name": "Algolia",
+      "category": "search",
+      "signals": [
+        {"kind": "script", "weight": 30, "pattern": "algoliasearch", "hint": "Algolia SDK"},
+        {"kind": "global", "weight": 20, "pattern": "algolia", "hint": "Algolia global"}
+      ]
+    },
+    {
+      "name": "Elasticsearch",
+      "category": "search",
+      "signals": [
+        {"kind": "header", "weight": 25, "target": "x-found|x-elastic", "pattern": "elastic", "hint": "Elastic headers"},
+        {"kind": "global", "weight": 15, "pattern": "elasticsearch", "hint": "Elasticsearch client"}
+      ]
+    },
+
+    {
+      "name": "Stripe",
+      "category": "payment",
+      "signals": [
+        {"kind": "script", "weight": 30, "pattern": "js\\.stripe\\.com", "hint": "Stripe.js"},
+        {"kind": "global", "weight": 25, "pattern": "Stripe\\s*\\(|stripe\\.elements", "hint": "Stripe global"}
+      ]
+    },
+    {
+      "name": "Razorpay",
+      "category": "payment",
+      "signals": [
+        {"kind": "script", "weight": 30, "pattern": "checkout\\.razorpay\\.com", "hint": "Razorpay checkout"},
+        {"kind": "global", "weight": 20, "pattern": "Razorpay\\s*\\(", "hint": "Razorpay global"}
+      ]
+    },
+    {
+      "name": "PayPal",
+      "category": "payment",
+      "signals": [
+        {"kind": "script", "weight": 30, "pattern": "www\\.paypal\\.com/sdk|paypal\\.com/sdk/js|smartpaymentbuttons", "hint": "PayPal SDK"}
+      ]
+    },
+
+    {
+      "name": "WooCommerce",
+      "category": "shopping",
+      "signals": [
+        {"kind": "html", "weight": 30, "pattern": "woocommerce", "hint": "WooCommerce markup"},
+        {"kind": "script", "weight": 20, "pattern": "woocommerce", "hint": "WooCommerce scripts"},
+        {"kind": "class", "weight": 15, "pattern": "woocommerce", "hint": "WooCommerce classes"}
+      ]
+    },
+    {
+      "name": "Shopify Storefront",
+      "category": "shopping",
+      "signals": [
+        {"kind": "global", "weight": 25, "pattern": "Shopify\\.shop|Shopify\\.buy", "hint": "Shopify buy globals"},
+        {"kind": "script", "weight": 20, "pattern": "cdn\\.shopify\\.com/s/shopify", "hint": "Shopify themes"}
+      ]
+    }
+  ]
+}

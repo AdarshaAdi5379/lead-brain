@@ -29,6 +29,7 @@ def extract_lead_from_fetch(
     model_primary: Optional[str] = None,
     model_fallback: Optional[str] = None,
     timeout_s: int = 60,
+    detected_technology_text: Optional[str] = None,
 ) -> ExtractionResult:
     """
     Calls an OpenAI model to extract a lead payload, then validates against ExtractedLead contract.
@@ -39,7 +40,7 @@ def extract_lead_from_fetch(
     """
 
     system_prompt = _system_prompt()
-    user_prompt = _user_prompt(fetch)
+    user_prompt = _user_prompt(fetch, detected_technology_text=detected_technology_text)
 
     model = model_primary or os.environ.get("OPENAI_MODEL_PRIMARY", "").strip() or "gpt-4.1-nano"
     fallback = (
@@ -69,13 +70,16 @@ def extract_lead_from_merged_content(
     model_primary: Optional[str] = None,
     model_fallback: Optional[str] = None,
     timeout_s: int = 60,
+    detected_technology_text: Optional[str] = None,
 ) -> ExtractionResult:
     """Extract a lead from the focused-crawler's merged document.
 
     Same schema and validation as the homepage-only path, but the model sees
     labelled sections for every crawled page instead of one page's text."""
     system_prompt = _system_prompt()
-    user_prompt = _user_prompt_merged(merged_text, source_url, contact_clues or [])
+    user_prompt = _user_prompt_merged(
+        merged_text, source_url, contact_clues or [], detected_technology_text=detected_technology_text
+    )
 
     model = model_primary or os.environ.get("OPENAI_MODEL_PRIMARY", "").strip() or "gpt-4.1-nano"
     fallback = (
@@ -144,13 +148,22 @@ def _system_prompt() -> str:
     )
 
 
-def _user_prompt(fetch: FetchResult) -> str:
+def _user_prompt(
+    fetch: FetchResult,
+    detected_technology_text: Optional[str] = None,
+) -> str:
     text = (fetch.text or "").strip()
     html = (fetch.html or "").strip()
 
     # Keep prompts bounded even if caps are changed elsewhere.
     text = text[:90_000]
     html_snippet = _extract_contact_html_snippet(html, max_chars=20_000)
+
+    technology_section = (
+        f"\n\n{detected_technology_text.strip()}"
+        if detected_technology_text and detected_technology_text.strip()
+        else ""
+    )
 
     return (
         f"Target URL: {fetch.final_url or fetch.url}\n"
@@ -161,6 +174,7 @@ def _user_prompt(fetch: FetchResult) -> str:
         f"{text}\n\n"
         "HTML contact snippet (may be truncated):\n"
         f"{html_snippet}\n"
+        f"{technology_section}"
     )
 
 
@@ -168,9 +182,16 @@ def _user_prompt_merged(
     merged_text: str,
     source_url: str,
     contact_clues: list[str],
+    detected_technology_text: Optional[str] = None,
 ) -> str:
     merged = (merged_text or "").strip()[:90_000]
     clues = "\n".join(contact_clues) if contact_clues else "None"
+
+    technology_section = (
+        f"\n\n{detected_technology_text.strip()}"
+        if detected_technology_text and detected_technology_text.strip()
+        else ""
+    )
 
     return (
         f"Target URL: {source_url}\n"
@@ -182,6 +203,7 @@ def _user_prompt_merged(
         f"{merged}\n\n"
         "Contact details found on the site:\n"
         f"{clues}\n"
+        f"{technology_section}"
     )
 
 

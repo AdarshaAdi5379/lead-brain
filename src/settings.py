@@ -56,3 +56,12 @@ MAX_PAGE_CHARACTERS: int = int(os.environ.get("MAX_PAGE_CHARACTERS", "2000"))
 # pages are skipped on later runs without re-fetching or re-sending to the LLM.
 CRAWL_CACHE_DIR: Path = PROJECT_ROOT / os.environ.get("CRAWL_CACHE_DIR", "data/crawl_cache")
 CRAWL_CACHE_FILE: str = os.environ.get("CRAWL_CACHE_FILE", "pages.json")
+
+# Website technology fingerprinting (Phase 11). Deterministic, offline engine.
+# Minimum confidence for a technology to be reported at all.
+FINGERPRINT_MIN_CONFIDENCE: int = int(os.environ.get("FINGERPRINT_MIN_CONFIDENCE", "25"))
+# Minimum confidence for a high-confidence fingerprint to override the LLM's
+# guessed platform (only for platform-mapped technologies).
+FINGERPRINT_MIN_OVERRIDE_CONFIDENCE: int = int(
+    os.environ.get("FINGERPRINT_MIN_OVERRIDE_CONFIDENCE", "60")
+)

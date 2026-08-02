@@ -14,6 +14,8 @@ class FetchResult:
     html: Optional[str]
     text: Optional[str]
     error: Optional[str]
+    headers: Optional[dict[str, str]] = None
+    cookies: Optional[list[dict]] = None
 
 
 def _limit_chars(value: str, max_chars: int) -> str:
@@ -97,6 +99,19 @@ class PlaywrightFetcher:
 
             # Basic blocked/empty detection: success if we got meaningful content.
             meaningful = len(text_limited.strip()) > 50 or len(html_limited.strip()) > 500
+
+            headers: dict[str, str] | None = None
+            cookies: list[dict] | None = None
+            try:
+                if response is not None:
+                    headers = dict(response.headers)
+            except Exception:  # pragma: no cover - best effort
+                headers = None
+            try:
+                cookies = await context.cookies()
+            except Exception:  # pragma: no cover - best effort
+                cookies = None
+
             return FetchResult(
                 url=url,
                 final_url=final_url,
@@ -105,6 +120,8 @@ class PlaywrightFetcher:
                 html=html_limited or None,
                 text=text_limited or None,
                 error=None if meaningful else "Empty or blocked page",
+                headers=headers,
+                cookies=cookies,
             )
         except Exception as exc:
             return FetchResult(

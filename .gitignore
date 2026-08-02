@@ -14,3 +14,6 @@ logs/
 *.sqlite
 *.db
 
+# The fingerprint catalog ships with the code (don't hide it under data/).
+!src/fingerprinting/data/
+

@@ -65,6 +65,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_leads_website_url_normalized
 
 CREATE INDEX IF NOT EXISTS ix_leads_score ON leads(score);
 CREATE INDEX IF NOT EXISTS ix_leads_priority ON leads(priority);
+
+CREATE TABLE IF NOT EXISTS technology_detections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL,
+  technology_name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  confidence INTEGER NOT NULL,
+  evidence TEXT NOT NULL DEFAULT '[]',
+  detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS ix_technology_detections_lead_id
+  ON technology_detections(lead_id);
+
+CREATE INDEX IF NOT EXISTS ix_technology_detections_category
+  ON technology_detections(category);
 """
 
 

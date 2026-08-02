@@ -68,3 +68,26 @@ class TestDbMigrations(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_init_db_creates_technology_detections_table(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        try:
+            init_db(connection)
+            tables = {
+                r["name"]
+                for r in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            self.assertIn("technology_detections", tables)
+            cols = {
+                r["name"]
+                for r in connection.execute(
+                    "PRAGMA table_info(technology_detections)"
+                ).fetchall()
+            }
+            for column in ("lead_id", "technology_name", "category", "confidence", "evidence"):
+                self.assertIn(column, cols)
+        finally:
+            connection.close()
+

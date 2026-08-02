@@ -22,14 +22,25 @@ from src.discovery.discovery import (
 )
 from src.discovery.cache import clear_discovery_cache
 from src.extraction_schema import validate_extracted_lead
+from src.fingerprinting.base import PLATFORM_FROM_TECHNOLOGY, Detection
+from src.fingerprinting.detector import FingerprintResult, TechnologyDetector, build_site_evidence
+from src.fingerprinting.report import summary_csv_fields
 from src.llm_extraction import extract_lead_from_fetch, extract_lead_from_merged_content
 from src.scoring import score_lead
 from src.scraping.focused_crawler import CrawlResult, FocusedCrawler
 from src.scraping.page_cache import PageCache
-from src.settings import CRAWL_CACHE_DIR, CRAWL_CACHE_FILE, DB_PATH
+from src.settings import (
+    CRAWL_CACHE_DIR,
+    CRAWL_CACHE_FILE,
+    DB_PATH,
+    FINGERPRINT_MIN_CONFIDENCE,
+    FINGERPRINT_MIN_OVERRIDE_CONFIDENCE,
+)
 from src.storage.db import connect, init_db
 from src.storage.leads import LeadUpsert, upsert_lead
+from src.storage.normalization import normalize_url_for_dedupe
 from src.storage.runs import RunStats, complete_run, start_run, update_run_stats
+from src.storage.technologies import detections_for_run, get_lead_id_by_url, replace_detections
 from src.url_loader import SeedRow, load_seed_csv
 
 
@@ -47,6 +58,12 @@ EXPORT_COLUMNS = [
     "score",
     "priority",
     "recommendation",
+    "cms",
+    "frontend_technology",
+    "backend_technology",
+    "hosting_cdn",
+    "analytics",
+    "confidence_summary",
     "extraction_success",
     "last_error",
 ]
@@ -337,6 +354,19 @@ def _run_seeds(
 
                 fetch = await fetcher.fetch(seed.url)
 
+                # Technology fingerprinting runs on the homepage response only
+                # (deterministic, no extra network). When a technology maps to
+                # the platform enum with high confidence, it overrides the LLM.
+                fingerprint: Optional[FingerprintResult] = None
+                platform_override: Optional[str] = None
+                try:
+                    fingerprint = _fingerprint(fetch)
+                    detected_platform = _platform_override(fingerprint)
+                    if detected_platform and detected_platform != "unknown":
+                        platform_override = detected_platform
+                except Exception as exc:  # detector must never break the pipeline
+                    logger.debug("Fingerprinting failed for %s: %s", seed.url, exc)
+
                 # Focused multi-page crawl (default), falling back to the
                 # homepage-only path whenever a crawl is disabled/unavailable.
                 crawl: Optional[CrawlResult] = None
@@ -349,15 +379,22 @@ def _run_seeds(
                             len(crawl.pages),
                             seed.url,
                         )
-                        extracted = _extract_from_crawl(seed, crawl)
+                        extracted = _extract_from_crawl(
+                            seed, crawl, fingerprint=fingerprint
+                        )
                     else:
                         logger.info(
                             "Crawl produced no usable content for %s; using homepage only",
                             seed.url,
                         )
-                        extracted = _extract_from_fetch(seed, fetch)
+                        extracted = _extract_from_fetch(
+                            seed, fetch, fingerprint=fingerprint
+                        )
                 else:
-                    extracted = _extract_from_fetch(seed, fetch)
+                    extracted = _extract_from_fetch(seed, fetch, fingerprint=fingerprint)
+
+                if platform_override:
+                    extracted["platform"] = platform_override
 
                 score = score_lead(extracted)
 
@@ -393,6 +430,15 @@ def _run_seeds(
                 except Exception as exc:
                     failed += 1
                     logger.error("[FAIL] upsert %s: %s", seed.url, exc)
+
+                if fingerprint and fingerprint.detections:
+                    try:
+                        normalized = normalize_url_for_dedupe(seed.url) if seed.url else ""
+                        lead_id = get_lead_id_by_url(connection, normalized) if normalized else None
+                        if lead_id is not None:
+                            replace_detections(connection, lead_id, list(fingerprint.detections))
+                    except Exception as exc:
+                        logger.debug("Could not persist detections for %s: %s", seed.url, exc)
 
                 usage = extracted.get("_usage")
                 cost = estimate_cost(usage) if usage is not None else None
@@ -442,6 +488,41 @@ def _make_crawler() -> FocusedCrawler:
     return FocusedCrawler()
 
 
+def _fingerprint(fetch) -> FingerprintResult:
+    """Run the deterministic technology detector over a homepage response."""
+    evidence = build_site_evidence(
+        html=fetch.html,
+        headers=fetch.headers or None,
+        cookies=fetch.cookies or None,
+    )
+    return TechnologyDetector(min_confidence=FINGERPRINT_MIN_CONFIDENCE).detect(
+        evidence, site_url=fetch.final_url or fetch.url
+    )
+
+
+def _platform_override(fingerprint: FingerprintResult) -> Optional[str]:
+    """Highest-confidence platform enum (if confident enough), else None."""
+    best: Optional[str] = None
+    best_conf = 0
+    for detection in fingerprint.detections:
+        mapped = PLATFORM_FROM_TECHNOLOGY.get(detection.name)
+        if mapped and detection.confidence > best_conf:
+            best, best_conf = mapped, detection.confidence
+    if best_conf >= FINGERPRINT_MIN_OVERRIDE_CONFIDENCE:
+        return best
+    return None
+
+
+def _tech_banner(fingerprint: Optional[FingerprintResult]) -> Optional[str]:
+    """LLM banner text when the detector produced detections (else None)."""
+    if fingerprint is None:
+        return None
+    from src.fingerprinting.report import to_llm_text
+
+    text = to_llm_text(fingerprint)
+    return text if fingerprint.detections else None
+
+
 def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
     extracted = validate_extracted_lead(
         {
@@ -487,7 +568,9 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
     upsert_lead(connection, lead)
 
 
-def _extract_from_fetch(seed: SeedRow, fetch) -> dict:
+def _extract_from_fetch(
+    seed: SeedRow, fetch, fingerprint: Optional[FingerprintResult] = None
+) -> dict:
     if not fetch.success:
         # Loggable error text is stored in last_error.
         return validate_extracted_lead(
@@ -505,7 +588,10 @@ def _extract_from_fetch(seed: SeedRow, fetch) -> dict:
         ).to_dict()
 
     try:
-        result = extract_lead_from_fetch(fetch)
+        result = extract_lead_from_fetch(
+            fetch,
+            detected_technology_text=_tech_banner(fingerprint),
+        )
         payload = result.lead.to_dict()
         # Attach usage for cost tracking without storing it in DB.
         payload["_usage"] = result.usage
@@ -528,15 +614,18 @@ def _extract_from_fetch(seed: SeedRow, fetch) -> dict:
         ).to_dict()
 
 
-def _extract_from_crawl(seed: SeedRow, crawl: CrawlResult) -> dict:
+def _extract_from_crawl(
+    seed: SeedRow, crawl: CrawlResult, fingerprint: Optional[FingerprintResult] = None
+) -> dict:
     try:
         result = extract_lead_from_merged_content(
             crawl.merged_text,
             source_url=crawl.url,
             contact_clues=list(crawl.contact_clues),
+            detected_technology_text=_tech_banner(fingerprint),
         )
         payload = result.lead.to_dict()
-        # Attach usage for cost tracking without storing it in DB.
+        # Attach usage to the payload for cost tracking without storing it in DB.
         payload["_usage"] = result.usage
         if not payload.get("business_name"):
             payload["business_name"] = seed.business_name or None
@@ -578,6 +667,28 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
         (run_id, int(min_score)),
     ).fetchall()
 
+    # Merge per-lead technology fingerprint summary (all detections for the run).
+    lead_id_map: dict[int, list[Detection]] = {}
+    for row in detections_for_run(connection, run_id):
+        lead_id = int(row["lead_id"])
+        lead_id_map.setdefault(lead_id, []).append(
+            Detection(
+                name=row["technology_name"],
+                category=row["category"],
+                confidence=int(row["confidence"]),
+                evidence=tuple(row["evidence"] or []),
+            )
+        )
+    tech_by_lead: dict[int, dict] = {
+        lead_id: summary_csv_fields(FingerprintResult(detections=tuple(items), site_url=None))
+        for lead_id, items in lead_id_map.items()
+    }
+
+    # lead_id by website_url_normalized for joining tech summaries.
+    lead_id_by_normalized: dict[str, int] = {}
+    for lead in connection.execute("SELECT id, website_url_normalized FROM leads WHERE run_id = ?", (run_id,)):
+        lead_id_by_normalized[str(lead["website_url_normalized"])] = int(lead["id"])
+
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS)
         writer.writeheader()
@@ -596,6 +707,18 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
             )
             record["recommendation"] = score.recommendation
             record["extraction_success"] = bool(record.get("extraction_success"))
+            record["cms"] = ""
+            record["frontend_technology"] = ""
+            record["backend_technology"] = ""
+            record["hosting_cdn"] = ""
+            record["analytics"] = ""
+            record["confidence_summary"] = ""
+            # Match the lead by its normalized URL (as stored by upsert).
+            normalized = record.get("website_url") or ""
+            lead_id = lead_id_by_normalized.get(normalize_url_for_dedupe(normalized))
+            if lead_id is not None:
+                for key, value in tech_by_lead.get(lead_id, {}).items():
+                    record[key] = value
             writer.writerow({k: record.get(k) for k in EXPORT_COLUMNS})
 
     return out_path

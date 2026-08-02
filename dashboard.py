@@ -10,6 +10,7 @@ import streamlit as st
 
 from src.settings import DB_PATH
 from src.storage.db import init_db
+from src.storage.technologies import detections_by_lead
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -68,10 +69,12 @@ def main() -> None:
 
     all_rows: list[LeadRow] = []
     total_db_leads = 0
+    tech_by_lead: dict[int, list[dict[str, Any]]] = {}
     with _connect(db_path) as connection:
         init_db(connection)
         all_rows = _fetch_leads(connection)
         total_db_leads = len(all_rows)
+        tech_by_lead = detections_by_lead(connection)
 
     if not all_rows:
         st.info("No leads found yet. Use the discovery panel in the sidebar to find new leads.")
@@ -85,11 +88,37 @@ def main() -> None:
         default=["Hot", "Warm", "Cold"],
     )
 
+    tech_filter = st.sidebar.multiselect(
+        "Has technology (category)",
+        options=["cms", "frontend", "backend", "hosting", "analytics", "libraries", "search", "payment", "shopping"],
+        format_func=lambda c: {
+            "cms": "CMS",
+            "frontend": "Frontend / Framework",
+            "backend": "Backend",
+            "hosting": "Hosting / CDN",
+            "analytics": "Analytics",
+            "libraries": "Libraries",
+            "search": "Search",
+            "payment": "Payments",
+            "shopping": "Shopping / e-commerce",
+        }.get(c, c),
+        key="tech_category_filter",
+    )
+
+    # Require at least one detection in a selected category.
+    def _has_tech(lead_id: int, categories: list[str]) -> bool:
+        if not categories:
+            return True
+        detections = tech_by_lead.get(lead_id, [])
+        detected = {d.get("category") for d in detections}
+        return bool(detected & set(categories))
+
     filtered = [
         row
         for row in all_rows
         if (row.score is not None and row.score >= min_score)
         and (not priority_filter or (row.priority in set(priority_filter)))
+        and _has_tech(row.id, tech_filter)
     ]
     filtered = filtered[:max_rows]
 
@@ -109,6 +138,21 @@ def main() -> None:
     else:
         st.bar_chart(scores)
 
+    st.subheader("Technology overview")
+    tech_counts: dict[str, int] = {}
+    for detections_ in tech_by_lead.values():
+        for d in detections_:
+            name = str(d.get("technology_name") or "")
+            if name:
+                tech_counts[name] = tech_counts.get(name, 0) + 1
+    if tech_counts:
+        top_tech = sorted(tech_counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        cols = st.columns(min(5, len(top_tech)))
+        for idx, (name, count) in enumerate(top_tech):
+            cols[idx % len(cols)].metric(name, str(count))
+    else:
+        st.caption("No technology detections yet. Run discovery/scraping to populate.")
+
     st.subheader("Leads table")
     table_rows = [
         {
@@ -120,6 +164,10 @@ def main() -> None:
             "score": r.score,
             "priority": r.priority,
             "platform": r.platform,
+            "technologies": ", ".join(
+                str(d.get("technology_name"))
+                for d in sorted(tech_by_lead.get(r.id, []), key=lambda x: -int(x.get("confidence") or 0))[:3]
+            ),
             "outreach_sent": r.outreach_sent,
             "outreach_sent_at": r.outreach_sent_at,
         }
@@ -138,6 +186,7 @@ def main() -> None:
             "score",
             "priority",
             "platform",
+            "technologies",
         ]
         display_df = df[[c for c in display_cols if c in df.columns]]
         event = st.dataframe(
@@ -192,6 +241,15 @@ def main() -> None:
     with right:
         draft = _outreach_email(selected)
         st.text_area("Outreach email draft", value=draft, height=320)
+
+        detections = tech_by_lead.get(selected.id, [])
+        if detections:
+            st.markdown("### Detected technologies")
+            for d in sorted(detections, key=lambda x: -int(x.get("confidence") or 0)):
+                percent = int(d.get("confidence") or 0)
+                st.markdown(f"- **{d.get('technology_name')}** — {percent}% ({d.get('category')})")
+        else:
+            st.caption("No technology detections stored for this lead.")
 
         st.markdown("### Lead actions")
         sent = st.checkbox("Outreach sent", value=bool(selected.outreach_sent), key=f"sent_{selected.id}")

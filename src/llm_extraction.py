@@ -47,13 +47,70 @@ def extract_lead_from_fetch(
     )
 
     try:
+        output_text, usage = _call_llm(
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            fallback=fallback,
+            timeout_s=timeout_s,
+        )
+    except Exception:
+        raise
+
+    lead = _parse_and_validate(output_text, fetch.final_url or fetch.url)
+    return ExtractionResult(lead=lead, usage=usage, raw_text=output_text)
+
+
+def extract_lead_from_merged_content(
+    merged_text: str,
+    source_url: str,
+    *,
+    contact_clues: Optional[list[str]] = None,
+    model_primary: Optional[str] = None,
+    model_fallback: Optional[str] = None,
+    timeout_s: int = 60,
+) -> ExtractionResult:
+    """Extract a lead from the focused-crawler's merged document.
+
+    Same schema and validation as the homepage-only path, but the model sees
+    labelled sections for every crawled page instead of one page's text."""
+    system_prompt = _system_prompt()
+    user_prompt = _user_prompt_merged(merged_text, source_url, contact_clues or [])
+
+    model = model_primary or os.environ.get("OPENAI_MODEL_PRIMARY", "").strip() or "gpt-4.1-nano"
+    fallback = (
+        model_fallback or os.environ.get("OPENAI_MODEL_FALLBACK", "").strip() or "gpt-4o-mini"
+    )
+
+    output_text, usage = _call_llm(
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        fallback=fallback,
+        timeout_s=timeout_s,
+    )
+
+    lead = _parse_and_validate(output_text, source_url)
+    return ExtractionResult(lead=lead, usage=usage, raw_text=output_text)
+
+
+def _call_llm(
+    *,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    fallback: str,
+    timeout_s: int,
+) -> tuple[str, Optional[OpenAIUsage]]:
+    try:
         output_text, usage, _raw = create_response(
             model=model,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             timeout_s=timeout_s,
         )
-    except Exception as exc:
+        return output_text, usage
+    except Exception:
         if fallback and fallback != model:
             output_text, usage, _raw = create_response(
                 model=fallback,
@@ -61,11 +118,8 @@ def extract_lead_from_fetch(
                 user_prompt=user_prompt,
                 timeout_s=timeout_s,
             )
-        else:
-            raise
-
-    lead = _parse_and_validate(output_text, fetch)
-    return ExtractionResult(lead=lead, usage=usage, raw_text=output_text)
+            return output_text, usage
+        raise
 
 
 def _system_prompt() -> str:
@@ -110,6 +164,27 @@ def _user_prompt(fetch: FetchResult) -> str:
     )
 
 
+def _user_prompt_merged(
+    merged_text: str,
+    source_url: str,
+    contact_clues: list[str],
+) -> str:
+    merged = (merged_text or "").strip()[:90_000]
+    clues = "\n".join(contact_clues) if contact_clues else "None"
+
+    return (
+        f"Target URL: {source_url}\n"
+        "Content type: focused multi-page crawl of the business website\n"
+        "Sections are labelled with the page they came from (HOME, ABOUT, "
+        "SERVICES, ...). Boilerplate (menus, footers, cookie banners) has been "
+        "removed and long pages were trimmed.\n\n"
+        "Merged visible text from all crawled pages (may be truncated):\n"
+        f"{merged}\n\n"
+        "Contact details found on the site:\n"
+        f"{clues}\n"
+    )
+
+
 def _extract_contact_html_snippet(html: str, *, max_chars: int) -> str:
     if not html:
         return ""
@@ -150,12 +225,12 @@ def _extract_contact_html_snippet(html: str, *, max_chars: int) -> str:
     return snippet[:max_chars]
 
 
-def _parse_and_validate(output_text: str, fetch: FetchResult) -> ExtractedLead:
+def _parse_and_validate(output_text: str, url: str) -> ExtractedLead:
     payload = _parse_json_object(output_text)
 
     # Ensure required key exists even if the model forgets.
     if "url" not in payload:
-        payload["url"] = fetch.final_url or fetch.url
+        payload["url"] = url
 
     payload["email"] = _sanitize_email(payload.get("email"))
     payload["phone"] = _sanitize_phone(payload.get("phone"))
@@ -166,7 +241,7 @@ def _parse_and_validate(output_text: str, fetch: FetchResult) -> ExtractedLead:
         # Surface a consistent failure payload for the pipeline.
         return validate_extracted_lead(
             {
-                "url": fetch.final_url or fetch.url,
+                "url": url,
                 "business_name": None,
                 "phone": None,
                 "email": None,

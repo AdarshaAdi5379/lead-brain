@@ -26,6 +26,14 @@ class LeadUpsert:
     extraction_success: bool = False
     last_error: Optional[str] = None
     run_id: Optional[int] = None
+    source: Optional[str] = None
+    osm_id: Optional[str] = None
+    osm_type: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    address: Optional[str] = None
+    opening_hours: Optional[str] = None
+    country: Optional[str] = None
 
 
 UPSERT_SQL = """
@@ -46,7 +54,15 @@ INSERT INTO leads (
   priority,
   extraction_success,
   extracted_at,
-  last_error
+  last_error,
+  source,
+  osm_id,
+  osm_type,
+  latitude,
+  longitude,
+  address,
+  opening_hours,
+  country
 )
 VALUES (
   :run_id,
@@ -65,7 +81,15 @@ VALUES (
   :priority,
   :extraction_success,
   datetime('now'),
-  :last_error
+  :last_error,
+  :source,
+  :osm_id,
+  :osm_type,
+  :latitude,
+  :longitude,
+  :address,
+  :opening_hours,
+  :country
 )
 ON CONFLICT(website_url_normalized) DO UPDATE SET
   run_id = excluded.run_id,
@@ -83,7 +107,15 @@ ON CONFLICT(website_url_normalized) DO UPDATE SET
   priority = excluded.priority,
   extraction_success = excluded.extraction_success,
   extracted_at = datetime('now'),
-  last_error = excluded.last_error;
+  last_error = excluded.last_error,
+  source = excluded.source,
+  osm_id = excluded.osm_id,
+  osm_type = excluded.osm_type,
+  latitude = excluded.latitude,
+  longitude = excluded.longitude,
+  address = excluded.address,
+  opening_hours = excluded.opening_hours,
+  country = excluded.country;
 """
 
 
@@ -167,6 +199,14 @@ def upsert_lead(connection: sqlite3.Connection, lead: LeadUpsert) -> str:
             "priority": lead.priority,
             "extraction_success": 1 if lead.extraction_success else 0,
             "last_error": lead.last_error,
+            "source": lead.source,
+            "osm_id": lead.osm_id,
+            "osm_type": lead.osm_type,
+            "latitude": lead.latitude,
+            "longitude": lead.longitude,
+            "address": lead.address,
+            "opening_hours": lead.opening_hours,
+            "country": lead.country,
         },
     )
     connection.commit()

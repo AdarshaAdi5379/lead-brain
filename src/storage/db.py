@@ -48,6 +48,15 @@ CREATE TABLE IF NOT EXISTS leads (
 
   last_error TEXT,
 
+  source TEXT,
+  osm_id TEXT,
+  osm_type TEXT,
+  latitude REAL,
+  longitude REAL,
+  address TEXT,
+  opening_hours TEXT,
+  country TEXT,
+
   FOREIGN KEY (run_id) REFERENCES scraping_runs(run_id) ON DELETE SET NULL
 );
 
@@ -84,3 +93,19 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     lead_columns = {r["name"] for r in connection.execute("PRAGMA table_info(leads)").fetchall()}
     if "outreach_sent_at" not in lead_columns:
         connection.execute("ALTER TABLE leads ADD COLUMN outreach_sent_at TEXT")
+
+    _ADDITIVE_LEAD_COLUMNS = [
+        ("source", "TEXT"),
+        ("osm_id", "TEXT"),
+        ("osm_type", "TEXT"),
+        ("latitude", "REAL"),
+        ("longitude", "REAL"),
+        ("address", "TEXT"),
+        ("opening_hours", "TEXT"),
+        ("country", "TEXT"),
+    ]
+    for column, column_type in _ADDITIVE_LEAD_COLUMNS:
+        if column not in lead_columns:
+            connection.execute(
+                f"ALTER TABLE leads ADD COLUMN {column} {column_type}"
+            )

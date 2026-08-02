@@ -17,6 +17,8 @@ Progress (implemented)
 - ✅ Phase 6 (Scheduling): Step 6.1 completed
 - ✅ Phase 7 (Hardening/Tests): Steps 7.1–7.2 completed
 - ✅ Phase 8 (Lead Discovery via Google Places API): Steps 8.1–8.6 completed
+- ✅ Phase 9 (Free Lead Discovery via OpenStreetMap): Steps 9.1–9.6 completed — OSM (Overpass + Nominatim) replaces Google Places as the keyless default provider
+- ✅ Phase 10 (Focused Multi Page Website Crawling): crawler module, focused crawl in the pipeline, disk cache, 43 new tests — homepage + top ranked internal pages merged into one labelled document for the LLM
 
 ---
 
@@ -406,6 +408,127 @@ Status
 Notes
 - This feature should be treated as a new lead source, not a replacement for the existing extraction pipeline.
 - Google Places is the recommended discovery source because it is more structured and reliable than scraping Google Maps pages directly.
+
+---
+
+PHASE 9 — Free Lead Discovery (OpenStreetMap default)
+
+Goal
+- Replace the paid Google Places provider with a free, keyless OpenStreetMap source so discovery runs cost nothing.
+- Keep the provider abstraction so Google (or future sources) can still be plugged in.
+
+Step 9.1 — Provider abstraction
+Tasks
+- Introduce a provider interface so a discovery source plugs into the existing pipeline.
+- Registry: `get_provider(name)`, `available_providers()`.
+- Keep Google behind the same interface, marked deprecated (warning).
+Status
+- ✅ Done
+- Code: `src/discovery/base.py`, `src/discovery/models.py`, `src/discovery/google.py`
+
+Step 9.2 — Nominatim geocoding
+Tasks
+- Resolve 'city, region' strings to coordinates + bounding box.
+- Follow Nominatim's 1 request/sec etiquette; retry/backoff on failures.
+- Cache results on disk for one day; an unreachable service raises a clear error.
+Status
+- ✅ Done
+- Code: `src/discovery/nominatim.py`
+
+Step 9.3 — Overpass POI discovery
+Tasks
+- Map user-friendly categories (~35) to OSM tags (e.g. plumber → craft=plumber, restaurant → amenity=restaurant) with a name-keyword fallback.
+- Build an OverpassQL query, run against the public endpoint, parse candidates from node/way/relation `out center tags`.
+- Prefer contact:* tags, website/phone/email; skip nameless elements and self-references.
+- Cache Overpass responses for 7 days.
+Status
+- ✅ Done
+- Code: `src/discovery/osm.py` (includes `python -m src.discovery.osm <category> <location> [limit]` smoke runner)
+
+Step 9.4 — Discovery metadata in storage
+Tasks
+- Persist discovery source + geodata next to each lead in SQLite (source, osm_id, osm_type, latitude, longitude, address, opening_hours, country) via an additive migration.
+- No code requires resetting the DB.
+Status
+- ✅ Done
+- Code: `src/storage/db.py` (columns + `_apply_migrations`), `src/storage/leads.py` (LeadUpsert + UPSERT_SQL)
+
+Step 9.5 — CLI + dashboard
+Tasks
+- `--provider {osm,google}` (default osm), `--clear-cache`.
+- Dashboard discovery panel lets you pick the provider.
+Status
+- ✅ Done
+- Code: `main.py`, `dashboard.py`
+
+Step 9.6 — Tests + live verification
+Tasks
+- Unit tests: category mapping, OverpassQL builder, element parsing, ProviderError paths, disk cache, dedupe, migration.
+- Verify a live discovery run and the manual CSV mode still pass end-to-end.
+Status
+- ✅ Done
+- Tests: `tests/test_overpass.py`, `tests/test_discovery.py`, `tests/test_db_migrations.py`
+- Verified: `main.py --discover --provider osm --category plumber --location "Austin, TX" --limit 5` and `--input business_urls.csv` both complete successfully.
+- Note: no paid APIs or keys required anywhere in the default path.
+
+---
+
+PHASE 10 — Multi-page Website Crawling
+
+Goal
+- When auditing a business website, crawl the homepage plus its best internal pages, merge their trimmed text into one labelled document, and send that to the LLM instead of only the homepage.
+- Page selection is deterministic (keyword rules, no AI), depth 1, no recursion.
+
+Step 10.1 — Page cache (in-memory + disk JSON)
+Tasks
+- SHA-256 content hash per page; JSON cache on disk (`data/crawl_cache/pages.json`, env-`CRAWL_CACHE_DIR`/`CRAWL_CACHE_FILE`).
+- Unchanged pages are reused across runs (no re-fetch, no re-send).
+Status
+- ✅ Done — `src/scraping/page_cache.py`
+- Verified live: second crawl visited 1 page / reused 4 from cache, same content hash.
+
+Step 10.2 — Content extraction + trimming
+Tasks
+- Parse title, meta description, canonical URL, heading hierarchy, cleaned visible text.
+- Remove boilerplate by selector (header/footer/nav/cookie/account/social/menu/…).
+- Keep contact clues (mailto:, tel:, bare emails) that survive stripping.
+- Trim long pages at paragraph boundaries, never splitting words.
+Status
+- ✅ Done
+- Code: `src/scraping/content_extractor.py`, `src/scraping/content_merger.py`
+
+Step 10.3 — Internal link extraction + page ranking
+Tasks
+- Same-domain links (www/query/fragment/asset/mailto/tel filtered + normalized,
+  first-seen dedupe).
+- Rank by positive keywords (about/services/products/…), filter negative ones
+  (privacy/terms/login/…), anchor-text hints; deterministic tie-breaks.
+- Select top `max_pages - 1` pages (defaults: `MAX_CRAWL_PAGES=5`, `MAX_CRAWL_DEPTH=1`).
+Status
+- ✅ Done
+- Code: `src/scraping/link_extractor.py`, `src/scraping/page_ranker.py`
+
+Step 10.4 — Crawler + pipeline wiring
+Tasks
+- `FocusedCrawler`: fetch homepage (Playwright), rank links, fetch selected pages
+  sequentially with per-page failure tolerance + cache reuse, build merged labelled
+  document (HOME/LABEL sections + CONTACT clues), log every step.
+- Pipeline: crawl by default; `--no-crawl` restores v1 homepage-only behavior;
+  `--clear-crawl-cache` empties the page cache; LLM sees merged doc via new
+  `extract_lead_from_merged_content` (same schema as before).
+Status
+- ✅ Done
+- Code: `src/scraping/focused_crawler.py`, `main.py`, `src/llm_extraction.py`, `src/settings.py`
+
+Step 10.5 — Tests + live verification
+Tasks
+- Unit tests offline (FakeFetcher, no network).
+Status
+- ✅ Done
+- Tests: `tests/test_link_extractor.py`, `tests/test_page_ranker.py`, `tests/test_content_extractor.py`, `tests/test_content_merger.py`, `tests/test_focused_crawler.py`; full suite 88 tests pass.
+- Live fixture site: home+4 pages crawled, privacy/blog skipped, 927 chars merged, metadata visited=5 selected=4 skipped=2, contact clues kept; pipeline run completes end-to-end.
+- Bug fixed: OpenAI Responses content must use `type: "input_text"` (old `"text"` is now rejected).
+- Note: LLM call reached the API successfully but the account currently has no credits (HTTP 429).
 
 ---
 

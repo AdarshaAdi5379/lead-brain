@@ -15,3 +15,56 @@ class TestDbMigrations(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_init_db_adds_discovery_columns(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        try:
+            init_db(connection)
+            cols = {r["name"] for r in connection.execute("PRAGMA table_info(leads)").fetchall()}
+            for column in ("source", "osm_id", "osm_type", "latitude", "longitude",
+                           "address", "opening_hours", "country"):
+                self.assertIn(column, cols, f"missing column: {column}")
+        finally:
+            connection.close()
+
+    def test_migration_adds_columns_to_existing_db(self) -> None:
+        """Simulate a pre-Phase-9 DB (original schema, no discovery columns)."""
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE leads (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  run_id INTEGER,
+                  business_name TEXT,
+                  phone TEXT,
+                  email TEXT,
+                  website_url TEXT,
+                  website_url_normalized TEXT NOT NULL,
+                  platform TEXT,
+                  complexity TEXT,
+                  load_speed TEXT,
+                  city TEXT,
+                  state TEXT,
+                  category TEXT,
+                  score INTEGER,
+                  priority TEXT,
+                  extraction_success INTEGER NOT NULL DEFAULT 0,
+                  extracted_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  outreach_sent INTEGER NOT NULL DEFAULT 0,
+                  outreach_sent_at TEXT,
+                  notes TEXT,
+                  last_error TEXT
+                )
+                """
+            )
+            init_db(connection)
+            cols = {r["name"] for r in connection.execute("PRAGMA table_info(leads)").fetchall()}
+            self.assertIn("source", cols)
+            self.assertIn("osm_id", cols)
+            self.assertIn("country", cols)
+            self.assertIn("longitude", cols)
+        finally:
+            connection.close()
+

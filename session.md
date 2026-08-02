@@ -91,17 +91,27 @@ How to run quick checks
 - Run pipeline: `python main.py --input business_urls.csv --limit 200 --min-score-export 30`
 - Run dashboard: `streamlit run dashboard.py`
 
-Phase 8 — Google Places API lead discovery (completed)
-- Discovery config: `src/settings.py` adds `GOOGLE_MAPS_API_KEY`, `PLACES_TEXT_SEARCH_RADIUS`, `PLACES_LANGUAGE`
-- Places API client: `src/discovery/places.py` — `text_search()` + `place_details()` via stdlib urllib
-- Discovery orchestration: `src/discovery/discovery.py` — `discover_to_seeds()` + `discover_leads()` + CSV query loader
-- Pipeline integration: `main.py` `--discover` mode (inline `--category --location` or batch `--discover-queries <csv>`)
-- Tests: `tests/test_discovery.py` (9 tests covering text search, details, dedupe, min-rating filter, CSV parsing, error handling)
-- Usage:
-  - Inline: `python main.py --discover --category plumber --location "Austin, TX" --limit 50`
-  - Batch CSV: `python main.py --discover --discover-queries queries.csv --limit 200`
+Phase 9 — Free OpenStreetMap lead discovery (completed)
+- Provider layer: `src/discovery/base.py` (`DiscoveryProvider` ABC + registry), `src/discovery/models.py` (`DiscoveryQuery`), `src/discovery/google.py` (deprecated Google adapter behind the same interface).
+- Nominatim geocoding: `src/discovery/nominatim.py` — location → lat/lon + bbox, 1 req/s politeness, 24h disk cache, clear `ProviderError` on failure.
+- Overpass discovery: `src/discovery/osm.py` — ~35 categories mapped to OSM tags (`CATEGORY_TAGS`, name-fallback), OverpassQL builder, element parsing (`contact:*`, website/address/email/phone), 7-day disk cache. Smoke runner: `python -m src.discovery.osm <category> <location> [limit]`.
+- Shared transport: `src/discovery/_http.py` (`HttpBackoff` GET/POST with throttling + exponential retry), `src/discovery/cache.py` (`DiskCache`, deterministic hashed keys).
+- Dedup/persistence: `candidate_to_seed` normalizes URL vs business identity; `src/storage/leads.py` + `db.py` migration persist osm_id/osm_type/address/lat/lon/opening_hours/country/source per lead (additive, no reset).
+- CLI/dashboard: `main.py --provider {osm,google}` (default osm) + `--clear-cache`; manager picker in `dashboard.py`.
+- No paid APIs or keys anywhere in the default path — discovery is fully free.
+- Verified live: `python main.py --discover --category plumber --location "Austin, TX" --limit 5` found 2 plumbing businesses with url/phone/email + provenance; `--input business_urls.csv` CSV mode still completes end-to-end.
+- Tests: `tests/test_overpass.py` (category/query/parse/cache/provider-error), updated `tests/test_discovery.py` (provider-based dedupe + google adapter), `tests/test_db_migrations.py` (new columns). Full suite: `python -m unittest discover -s tests` (45 tests, pass).
 
-Remaining nice-to-haves (Phase 9+)
-- Discovery UX: choose city/category query inputs for Google Places.
-- Discovery persistence: write discovered leads directly to CSV or SQLite.
-- Discovery validation: test empty-result handling and place/website dedupe.
+Phase 10 — Focused multi-page website crawling (completed)
+- Page cache (in-memory + disk JSON, SHA-256 content hash): `src/scraping/page_cache.py`. Default store `data/crawl_cache/pages.json` (env `CRAWL_CACHE_DIR`/`CRAWL_CACHE_FILE`).
+- Content extraction: `src/scraping/content_extractor.py` (boilerplate selectors removed, title/meta/canonical/headings/cleaned text, `extract_contact_clues`), trimming at paragraph boundaries in `src/scraping/content_merger.py` (`trim_text`, labelled `Section` merge, `content_hash`).
+- Link extraction + ranking: `src/scraping/link_extractor.py` (same-domain, normalization/dedupe, asset/scheme filters) and `src/scraping/page_ranker.py` (positive/negative keyword scoring + anchor hints, deterministic `rank_pages`/`select_pages`).
+- Crawler: `src/scraping/focused_crawler.py` — homepage + up to `MAX_CRAWL_PAGES-1` ranked pages (default 5 total, depth 1), sequential Playwright fetches, per-page failure tolerance, cache reuse, merged labelled doc + CONTACT section, step-by-step INFO logging, CLI smoke runner `python -m src.scraping.focused_crawler <url> [--pages N]`.
+- Pipeline wiring (`main.py`): crawl on by default, `--no-crawl` restores homepage-only v1, `--clear-crawl-cache` empties the page cache; new `extract_lead_from_merged_content` in `src/llm_extraction.py` (same schema); `src/settings.py` crawl knobs.
+- Fix: `src/llm/openai_responses.py` now sends Responses content blocks as `type: "input_text"` — the old `"text"` shape is rejected by the current API (affects both v1 and crawl paths; worth noting the account currently reports no credits / HTTP 429).
+- Live fixture-site verification: home + about/services/contact/portfolio selected (privacy/blog skipped), 927 chars merged, second run reused 4 cached pages (visited=1), end-to-end pipeline run completes.
+- Tests: 43 new across `tests/test_link_extractor.py`, `tests/test_page_ranker.py`, `tests/test_content_extractor.py`, `tests/test_content_merger.py`, `tests/test_focused_crawler.py`. Full suite: 88 tests pass.
+
+Remaining nice-to-haves (Phase 10)
+- Discovery UX: choose city/category in the dashboard and run it from the UI.
+- Harder on OSM results — filter out closed/permanently-closed and low-signal businesses before scrape.

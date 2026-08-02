@@ -407,7 +407,14 @@ def _update_lead_actions(
 def _render_discover_section(db_path: Path) -> None:
     st.sidebar.markdown("---")
     st.sidebar.subheader("Discover New Leads")
-    st.sidebar.caption("Automatically find businesses via Google Places, then scrape and score them.")
+    st.sidebar.caption("Find businesses via OpenStreetMap (free, no key) and scrape + score them.")
+
+    provider = st.sidebar.selectbox(
+        "Discovery source",
+        options=["osm", "google"],
+        format_func=lambda p: "OpenStreetMap (free)" if p == "osm" else "Google Places (deprecated)",
+        key="disc_provider",
+    )
 
     category = st.sidebar.text_input(
         "Business category",
@@ -428,10 +435,10 @@ def _render_discover_section(db_path: Path) -> None:
             st.sidebar.error("Both category and location are required.")
             return
 
-        has_key = _check_google_places_key()
-        if not has_key:
+        if provider == "google" and not _check_google_places_key():
             st.sidebar.error(
-                "GOOGLE_MAPS_API_KEY is not set. Add it to your .env file."
+                "GOOGLE_MAPS_API_KEY is not set. Add it to your .env file, "
+                "or switch to the free OpenStreetMap source."
             )
             return
 
@@ -440,7 +447,7 @@ def _render_discover_section(db_path: Path) -> None:
         )
 
         try:
-            status_placeholder.write("Querying Google Places...")
+            status_placeholder.write(f"Querying {provider.upper()} for businesses...")
             st.session_state["disc_run_started"] = True
 
             from main import run_discovery_pipeline
@@ -450,6 +457,7 @@ def _render_discover_section(db_path: Path) -> None:
                 location=location,
                 limit=int(max_leads),
                 min_score_export=30,
+                provider=provider,
             )
 
             total = result["total"]

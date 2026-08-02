@@ -20,10 +20,13 @@ from src.discovery.discovery import (
     discover_to_seeds,
     load_discovery_queries_csv,
 )
+from src.discovery.cache import clear_discovery_cache
 from src.extraction_schema import validate_extracted_lead
-from src.llm_extraction import extract_lead_from_fetch
+from src.llm_extraction import extract_lead_from_fetch, extract_lead_from_merged_content
 from src.scoring import score_lead
-from src.settings import DB_PATH
+from src.scraping.focused_crawler import CrawlResult, FocusedCrawler
+from src.scraping.page_cache import PageCache
+from src.settings import CRAWL_CACHE_DIR, CRAWL_CACHE_FILE, DB_PATH
 from src.storage.db import connect, init_db
 from src.storage.leads import LeadUpsert, upsert_lead
 from src.storage.runs import RunStats, complete_run, start_run, update_run_stats
@@ -66,13 +69,30 @@ def main() -> None:
     logger = _setup_logging(args.log_file)
     logger.info("Starting run")
 
+    if args.clear_cache:
+        cleared = clear_discovery_cache()
+        logger.info("Cleared discovery cache files: %d", cleared)
+        if not args.discover and not args.input and not args.only_failed:
+            logger.info("Cache cleared; nothing else to do.")
+            return 0
+
+    if args.clear_crawl_cache:
+        logger.info("Cleared crawl page cache entries: %d", PageCache(CRAWL_CACHE_DIR, CRAWL_CACHE_FILE).clear())
+
     if args.discover:
+        if args.provider == "google":
+            logger.warning(
+                "Google Places provider is deprecated and requires a paid "
+                "GOOGLE_MAPS_API_KEY. Prefer the default 'osm' provider."
+            )
         queries = _resolve_discovery_queries(args)
         logger.info("Discovery queries: %d", len(queries))
         for q in queries:
             logger.info("  Discover: %s in %s", q.category, q.location)
 
-        discovered_seeds = discover_to_seeds(queries)[: max(0, int(args.limit))]
+        discovered_seeds = discover_to_seeds(
+            queries, provider=args.provider, limit=int(args.limit)
+        )[: max(0, int(args.limit))]
         logger.info("Discovered seeds: %d", len(discovered_seeds))
 
         _process_seeds_through_pipeline(
@@ -131,6 +151,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Location for inline discovery (e.g. 'Austin, TX')",
     )
+    discovery_group.add_argument(
+        "--provider",
+        default="osm",
+        choices=["osm", "google"],
+        help="Discovery source: 'osm' (OpenStreetMap, free, no key) or "
+        "'google' (deprecated, requires GOOGLE_MAPS_API_KEY). Default: osm",
+    )
+    discovery_group.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clear the local discovery cache (geocode + Overpass responses)",
+    )
 
     parser.add_argument("--input", default=None, help="Seed CSV path")
     parser.add_argument("--min-score-export", type=int, default=30)
@@ -145,6 +177,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--log-file",
         default="auto",
         help="Log file path, 'auto' for logs/run_<timestamp>.log, or 'none' to disable",
+    )
+    parser.add_argument(
+        "--no-crawl",
+        action="store_true",
+        help="Disable focused multi-page crawling; only audit the homepage (v1 behaviour)",
+    )
+    parser.add_argument(
+        "--clear-crawl-cache",
+        action="store_true",
+        help="Clear the persisted page cache used by the focused crawler",
     )
     return parser
 
@@ -171,6 +213,8 @@ def _run_pipeline(connection, logger, seeds: list[SeedRow], args) -> None:
         run_id,
         seeds,
         max_cost_usd=args.max_cost_usd,
+        crawler=_make_crawler(),
+        no_crawl=args.no_crawl,
     )
     update_run_stats(connection, run_id, stats)
     complete_run(connection, run_id)
@@ -197,6 +241,7 @@ def run_discovery_pipeline(
     limit: int = 50,
     max_cost_usd: Optional[float] = None,
     min_score_export: int = 30,
+    provider: str = "osm",
 ) -> dict[str, Any]:
     """
     Run discovery + scrape + extract + score pipeline inline.
@@ -205,8 +250,10 @@ def run_discovery_pipeline(
     logger = logging.getLogger("lead.dashboard")
 
     queries = [DiscoveryQuery(category=category, location=location)]
-    discovered_seeds = discover_to_seeds(queries)[:max(0, limit)]
-    logger.info("Discovered %d seeds from Google Places", len(discovered_seeds))
+    discovered_seeds = discover_to_seeds(queries, provider=provider, limit=int(limit))[
+        : max(0, int(limit))
+    ]
+    logger.info("Discovered %d seeds via provider '%s'", len(discovered_seeds), provider)
 
     if not discovered_seeds:
         return {"total": 0, "ok": 0, "failed": 0, "cost": 0.0, "seeds": 0}
@@ -250,6 +297,8 @@ def _run_seeds(
     seeds: list[SeedRow],
     *,
     max_cost_usd: Optional[float],
+    crawler: Optional[FocusedCrawler] = None,
+    no_crawl: bool = False,
 ) -> RunStats:
     total = 0
     ok = 0
@@ -287,14 +336,36 @@ def _run_seeds(
                     continue
 
                 fetch = await fetcher.fetch(seed.url)
-                extracted = _extract_from_fetch(seed, fetch)
+
+                # Focused multi-page crawl (default), falling back to the
+                # homepage-only path whenever a crawl is disabled/unavailable.
+                crawl: Optional[CrawlResult] = None
+                if crawler is not None and not no_crawl and fetch.success:
+                    crawl = await crawler.crawl(fetcher, seed.url, home_fetch=fetch)
+                    if crawl.ok and crawl.merged_text.strip():
+                        logger.info(
+                            "Sending merged content (%d chars, %d pages) to LLM for %s",
+                            len(crawl.merged_text),
+                            len(crawl.pages),
+                            seed.url,
+                        )
+                        extracted = _extract_from_crawl(seed, crawl)
+                    else:
+                        logger.info(
+                            "Crawl produced no usable content for %s; using homepage only",
+                            seed.url,
+                        )
+                        extracted = _extract_from_fetch(seed, fetch)
+                else:
+                    extracted = _extract_from_fetch(seed, fetch)
+
                 score = score_lead(extracted)
 
                 lead = LeadUpsert(
                     website_url=seed.url,
                     business_name=extracted.get("business_name") or seed.business_name or None,
-                    phone=extracted.get("phone"),
-                    email=extracted.get("email"),
+                    phone=extracted.get("phone") or seed.phone,
+                    email=extracted.get("email") or seed.email,
                     platform=extracted.get("platform"),
                     complexity=extracted.get("complexity"),
                     load_speed=extracted.get("load_speed"),
@@ -306,6 +377,14 @@ def _run_seeds(
                     extraction_success=bool(extracted.get("extraction_success")),
                     last_error=extracted.get("last_error"),
                     run_id=run_id,
+                    source=seed.source,
+                    osm_id=seed.osm_id,
+                    osm_type=seed.osm_type,
+                    latitude=seed.latitude,
+                    longitude=seed.longitude,
+                    address=seed.address,
+                    opening_hours=seed.opening_hours,
+                    country=seed.country,
                 )
 
                 try:
@@ -359,13 +438,17 @@ def _maybe_playwright_fetcher():
     return PlaywrightFetcher()
 
 
+def _make_crawler() -> FocusedCrawler:
+    return FocusedCrawler()
+
+
 def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
     extracted = validate_extracted_lead(
         {
             "url": None,
             "business_name": seed.business_name or None,
-            "phone": None,
-            "email": None,
+            "phone": seed.phone,
+            "email": seed.email,
             "platform": "unknown",
             "complexity": "unknown",
             "load_speed": "unknown",
@@ -378,8 +461,8 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
     lead = LeadUpsert(
         website_url=None,
         business_name=seed.business_name or None,
-        phone=None,
-        email=None,
+        phone=seed.phone,
+        email=seed.email,
         platform=extracted.get("platform"),
         complexity=extracted.get("complexity"),
         load_speed=extracted.get("load_speed"),
@@ -391,6 +474,14 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
         extraction_success=False,
         last_error=extracted.get("last_error"),
         run_id=run_id,
+        source=seed.source,
+        osm_id=seed.osm_id,
+        osm_type=seed.osm_type,
+        latitude=seed.latitude,
+        longitude=seed.longitude,
+        address=seed.address,
+        opening_hours=seed.opening_hours,
+        country=seed.country,
     )
 
     upsert_lead(connection, lead)
@@ -433,6 +524,35 @@ def _extract_from_fetch(seed: SeedRow, fetch) -> dict:
                 "load_speed": "unknown",
                 "extraction_success": False,
                 "last_error": f"LLM extraction failed: {exc}",
+            }
+        ).to_dict()
+
+
+def _extract_from_crawl(seed: SeedRow, crawl: CrawlResult) -> dict:
+    try:
+        result = extract_lead_from_merged_content(
+            crawl.merged_text,
+            source_url=crawl.url,
+            contact_clues=list(crawl.contact_clues),
+        )
+        payload = result.lead.to_dict()
+        # Attach usage for cost tracking without storing it in DB.
+        payload["_usage"] = result.usage
+        if not payload.get("business_name"):
+            payload["business_name"] = seed.business_name or None
+        return payload
+    except Exception as exc:
+        return validate_extracted_lead(
+            {
+                "url": crawl.url,
+                "business_name": seed.business_name or None,
+                "phone": None,
+                "email": None,
+                "platform": "unknown",
+                "complexity": "unknown",
+                "load_speed": "unknown",
+                "extraction_success": False,
+                "last_error": f"LLM extraction failed (crawl): {exc}",
             }
         ).to_dict()
 

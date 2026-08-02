@@ -72,8 +72,8 @@ def create_response(
     payload: dict[str, Any] = {
         "model": model,
         "input": [
-            {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
-            {"role": "user", "content": [{"type": "text", "text": user_prompt}]},
+            {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+            {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
         ],
     }
     data = json.dumps(payload).encode("utf-8")

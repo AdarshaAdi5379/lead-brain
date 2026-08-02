@@ -13,6 +13,18 @@ class SeedRow:
     url: Optional[str]
     city: str
     state: str
+    # Enriched fields discovered via a provider (e.g. OpenStreetMap). Optional
+    # so the manual CSV loader remains fully backward compatible.
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    country: Optional[str] = None
+    osm_id: Optional[str] = None
+    osm_type: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    address: Optional[str] = None
+    opening_hours: Optional[str] = None
+    source: Optional[str] = None
 
 
 _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
@@ -21,7 +33,21 @@ _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "url": ("url", "website", "website_url", "site", "link", "homepage"),
     "city": ("city", "town", "locality"),
     "state": ("state", "province", "region"),
+    "phone": ("phone", "telephone", "contact_phone"),
+    "email": ("email", "e_mail", "contact_email"),
+    "country": ("country", "nation"),
+    "osm_id": ("osm_id", "osm"),
+    "osm_type": ("osm_type",),
+    "latitude": ("latitude", "lat"),
+    "longitude": ("longitude", "lon", "lng"),
+    "address": ("address", "addr"),
+    "opening_hours": ("opening_hours", "hours"),
+    "source": ("source", "origin"),
 }
+
+# Only these base columns must exist in a seed CSV; everything else in
+# _COLUMN_ALIASES is optional (providers add them).
+_REQUIRED_COLUMNS = ("business_name", "category", "url", "city", "state")
 
 
 def _first_present(row: dict[str, str], keys: Iterable[str]) -> str:
@@ -85,15 +111,44 @@ def load_seed_csv(csv_path: Path) -> list[SeedRow]:
                     url=url,
                     city=city,
                     state=state,
+                    phone=_clean_optional(row, _COLUMN_ALIASES["phone"]),
+                    email=_clean_optional(row, _COLUMN_ALIASES["email"]),
+                    country=_clean_optional(row, _COLUMN_ALIASES["country"]),
+                    osm_id=_clean_optional(row, _COLUMN_ALIASES["osm_id"]),
+                    osm_type=_clean_optional(row, _COLUMN_ALIASES["osm_type"]),
+                    latitude=_float_optional(row, _COLUMN_ALIASES["latitude"]),
+                    longitude=_float_optional(row, _COLUMN_ALIASES["longitude"]),
+                    address=_clean_optional(row, _COLUMN_ALIASES["address"]),
+                    opening_hours=_clean_optional(row, _COLUMN_ALIASES["opening_hours"]),
+                    source=_clean_optional(row, _COLUMN_ALIASES["source"]),
                 )
             )
 
     return seeds
 
 
+def _clean_optional(row: dict[str, str], keys: Iterable[str]) -> Optional[str]:
+    value = _first_present(row, keys)
+    return _clean_str(value) or None
+
+
+def _as_float(value: object) -> Optional[float]:
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return number
+
+
+def _float_optional(row: dict[str, str], keys: Iterable[str]) -> Optional[float]:
+    raw = _first_present(row, keys)
+    return _as_float(raw) if raw else None
+
+
 def _validate_required_columns(fieldnames: set[str]) -> None:
     missing: list[str] = []
-    for required, aliases in _COLUMN_ALIASES.items():
+    for required in _REQUIRED_COLUMNS:
+        aliases = _COLUMN_ALIASES[required]
         if not any(alias in fieldnames for alias in aliases):
             missing.append(required)
 

@@ -10,6 +10,7 @@ import streamlit as st
 
 from src.settings import DB_PATH
 from src.storage.db import init_db
+from src.storage.opportunities import opportunities_by_lead as lead_opportunities_by_lead
 from src.storage.scores import scores_by_lead as lead_scores_by_lead
 from src.storage.seo import audits_by_lead as seo_audits_by_lead
 from src.storage.seo import page_audits_for_audit
@@ -75,6 +76,7 @@ def main() -> None:
     tech_by_lead: dict[int, list[dict[str, Any]]] = {}
     seo_by_lead: dict[int, dict[str, Any]] = {}
     score_by_lead: dict[int, dict[str, Any]] = {}
+    opp_by_lead: dict[int, list[dict[str, Any]]] = {}
     with _connect(db_path) as connection:
         init_db(connection)
         all_rows = _fetch_leads(connection)
@@ -82,6 +84,7 @@ def main() -> None:
         tech_by_lead = detections_by_lead(connection)
         seo_by_lead = seo_audits_by_lead(connection)
         score_by_lead = lead_scores_by_lead(connection)
+        opp_by_lead = lead_opportunities_by_lead(connection)
 
     if not all_rows:
         st.info("No leads found yet. Use the discovery panel in the sidebar to find new leads.")
@@ -136,6 +139,42 @@ def main() -> None:
     )
     min_seo_score = int(st.sidebar.slider("Min site SEO score", 0, 100, 0, key="min_seo_score"))
 
+    st.sidebar.subheader("Opportunity filters")
+    opp_category_filter = st.sidebar.multiselect(
+        "Opportunity category",
+        options=[
+            "website_redesign",
+            "seo_improvement",
+            "performance_optimization",
+            "accessibility_improvement",
+            "analytics_setup",
+            "security_improvement",
+            "contact_funnel_improvement",
+        ],
+        format_func=lambda c: {
+            "website_redesign": "Website Redesign",
+            "seo_improvement": "SEO Improvement",
+            "performance_optimization": "Performance Optimization",
+            "accessibility_improvement": "Accessibility Improvement",
+            "analytics_setup": "Analytics Setup",
+            "security_improvement": "Security Improvement",
+            "contact_funnel_improvement": "Contact Funnel Improvement",
+        }.get(c, c),
+        key="opp_category_filter",
+    )
+    min_opp_score = int(st.sidebar.slider("Min opportunity score", 0, 100, 0, key="min_opp_score"))
+    opp_priority_filter = st.sidebar.multiselect(
+        "Opportunity priority",
+        options=[
+            "High Revenue Potential",
+            "Medium Revenue Potential",
+            "Low Revenue Potential",
+            "Minimal Opportunity",
+        ],
+        default=[],
+        key="opp_priority_filter",
+    )
+
     # Per-page toggles applied to the selected lead's page breakdown.
     page_missing_title = st.sidebar.checkbox("Pages missing title", key="page_missing_title")
     page_missing_meta = st.sidebar.checkbox("Pages missing meta description", key="page_missing_meta")
@@ -168,6 +207,31 @@ def main() -> None:
             return False
         return True
 
+    def _opportunity_summary(lead_id: int) -> tuple[Optional[str], int, Optional[str]]:
+        opportunities = opp_by_lead.get(lead_id) or []
+        top = opportunities[0] if opportunities else None
+        if top is None:
+            return None, 0, None
+        return (
+            str(top.get("label") or top.get("category") or ""),
+            int(top.get("score") or 0),
+            str(top.get("priority") or ""),
+        )
+
+    def _has_opportunity(lead_id: int) -> bool:
+        label, top_score, priority = _opportunity_summary(lead_id)
+        if opp_category_filter:
+            categories = {str(o.get("category")) for o in opp_by_lead.get(lead_id, [])}
+            if not categories & set(opp_category_filter):
+                return False
+        if min_opp_score > 0 and top_score < min_opp_score:
+            return False
+        if opp_priority_filter and (not priority or priority not in set(opp_priority_filter)):
+            return False
+        if not opp_category_filter and not opp_priority_filter and min_opp_score == 0:
+            return True
+        return True
+
     def _lead_label_and_score(lead_id: int) -> tuple[str, int]:
         score_row = score_by_lead.get(lead_id)
         if score_row:
@@ -188,6 +252,7 @@ def main() -> None:
         and (not priority_filter or (row.priority in set(priority_filter)))
         and _has_tech(row.id, tech_filter)
         and _has_seo(row.id)
+        and _has_opportunity(row.id)
     ]
     if priority_label_filter:
         filtered = [row for row in filtered if _lead_label_and_score(row.id)[0] in set(priority_label_filter)]
@@ -210,7 +275,8 @@ def main() -> None:
     col4.metric("Cold in view", str(sum(1 for r in filtered if _lead_label_and_score(r.id)[0] == "Cold")))
     avg_final = _avg([_lead_label_and_score(r.id)[1] for r in filtered])
     col5.metric("Avg final score", f"{avg_final:.1f}" if avg_final is not None else "—")
-    col6.metric("Total leads (DB)", str(total_db_leads))
+    high_opp = sum(1 for r in filtered if _opportunity_summary(r.id)[1] >= 70)
+    col6.metric("High opportunity leads", str(high_opp))
 
     st.subheader("Score distribution")
     scores = [r.score for r in filtered if r.score is not None]
@@ -254,6 +320,9 @@ def main() -> None:
             ),
             "seo_score": seo_by_lead.get(r.id, {}).get("site_score"),
             "seo_health": seo_by_lead.get(r.id, {}).get("overall_health"),
+            "top_opportunity": _opportunity_summary(r.id)[0],
+            "opportunity_score": _opportunity_summary(r.id)[1],
+            "opportunity_priority": _opportunity_summary(r.id)[2],
             "outreach_sent": r.outreach_sent,
             "outreach_sent_at": r.outreach_sent_at,
         }
@@ -277,6 +346,9 @@ def main() -> None:
             "technologies",
             "seo_score",
             "seo_health",
+            "top_opportunity",
+            "opportunity_score",
+            "opportunity_priority",
         ]
         display_df = df[[c for c in display_cols if c in df.columns]]
         event = st.dataframe(
@@ -340,6 +412,8 @@ def main() -> None:
                 st.markdown(f"- **{d.get('technology_name')}** — {percent}% ({d.get('category')})")
         else:
             st.caption("No technology detections stored for this lead.")
+
+        _render_opportunities_section(opp_by_lead.get(selected.id))
 
         _render_scoring_section(score_by_lead.get(selected.id))
 
@@ -431,6 +505,44 @@ def _label_for_id(rows: list[LeadRow], lead_id: int) -> str:
     name = row.business_name or "(no name)"
     score = row.score if row.score is not None else "—"
     return f"{name} — {score} ({row.priority or '—'})"
+
+
+def _render_opportunities_section(opportunities: Optional[list[dict[str, Any]]]) -> None:
+    st.markdown("### Business opportunities (deterministic)")
+    if not opportunities:
+        st.caption("No business opportunities detected for this lead.")
+        return
+
+    top = opportunities[0]
+    col_score, col_label, col_impact = st.columns(3)
+    col_score.metric("Top opportunity", f"{int(top.get('score') or 0)}/100")
+    col_label.metric("Priority", str(top.get("priority") or "—"))
+    col_impact.metric("Business impact", str(top.get("business_impact") or "—"))
+
+    for item in opportunities:
+        label = str(item.get("label") or item.get("category") or "")
+        score = int(item.get("score") or 0)
+        severity = str(item.get("severity") or "")
+        with st.expander(
+            f"{label} — {score}/100 ({severity})", expanded=item is top
+        ):
+            st.progress(score / 100.0, text=f"Score: {score}/100")
+            impact = item.get("business_impact") or "—"
+            effort = item.get("implementation_effort") or "—"
+            confidence = int(item.get("confidence") or 0)
+            st.write(
+                f"Impact: **{impact}** · Effort: **{effort}** · "
+                f"Confidence: {confidence}%"
+            )
+            services = item.get("recommended_services") or []
+            if services:
+                st.markdown("**Recommended services**")
+                st.markdown(" · ".join(f"`{s}`" for s in services))
+            evidence = item.get("evidence") or []
+            if evidence:
+                st.markdown("**Evidence**")
+                for reason in evidence:
+                    st.markdown(f"- {reason}")
 
 
 def _render_scoring_section(score_row: Optional[dict[str, Any]]) -> None:

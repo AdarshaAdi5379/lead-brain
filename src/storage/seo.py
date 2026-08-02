@@ -20,6 +20,7 @@ SITE_FIELDS = [
     "pages_with_duplicate_titles",
     "pages_with_duplicate_descriptions",
     "pages_with_thin_content",
+    "pages_with_mixed_content",
     "robots_txt_detected",
     "sitemap_detected",
 ]
@@ -82,6 +83,7 @@ def replace_audit(
         "pages_with_duplicate_titles",
         "pages_with_duplicate_descriptions",
         "pages_with_thin_content",
+        "pages_with_mixed_content",
         "total_pages_audited",
         "html_pages",
     ):
@@ -101,6 +103,7 @@ def replace_audit(
           pages_with_images_missing_alt,
           pages_with_duplicate_titles, pages_with_duplicate_descriptions,
           pages_with_thin_content,
+          pages_with_mixed_content,
           robots_txt_detected, sitemap_detected,
           severity_summary, raw_summary_json
         ) VALUES (
@@ -112,6 +115,7 @@ def replace_audit(
           :pages_with_images_missing_alt,
           :pages_with_duplicate_titles, :pages_with_duplicate_descriptions,
           :pages_with_thin_content,
+          :pages_with_mixed_content,
           :robots_txt_detected, :sitemap_detected,
           :severity_summary, :raw_summary_json
         )

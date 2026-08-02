@@ -116,6 +116,7 @@ class TestDbMigrations(unittest.TestCase):
                 "total_pages_audited",
                 "pages_with_title",
                 "pages_with_thin_content",
+                "pages_with_mixed_content",
                 "severity_summary",
                 "raw_summary_json",
             ):
@@ -143,6 +144,82 @@ class TestDbMigrations(unittest.TestCase):
                 ).fetchall()
             }
             self.assertIn("ux_seo_audits_lead_id", indexes)
+        finally:
+            connection.close()
+
+    def test_init_db_creates_business_opportunities_table(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        try:
+            init_db(connection)
+            tables = {
+                r["name"]
+                for r in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            self.assertIn("business_opportunities", tables)
+
+            cols = {
+                r["name"]
+                for r in connection.execute("PRAGMA table_info(business_opportunities)").fetchall()
+            }
+            for column in (
+                "lead_id",
+                "category",
+                "label",
+                "score",
+                "severity",
+                "confidence",
+                "priority",
+                "business_impact",
+                "implementation_effort",
+                "recommended_services_json",
+                "evidence_json",
+            ):
+                self.assertIn(column, cols, f"missing column: {column}")
+
+            indexes = {
+                r["name"]
+                for r in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+            self.assertIn("ix_business_opportunities_lead_id", indexes)
+            self.assertIn("ix_business_opportunities_category", indexes)
+        finally:
+            connection.close()
+
+    def test_migration_adds_pages_with_mixed_content_to_existing_db(self) -> None:
+        """Simulate a pre-opportunity DB with an older seo_audits table."""
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.executescript(
+                """
+                CREATE TABLE leads (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  run_id INTEGER,
+                  business_name TEXT,
+                  website_url_normalized TEXT NOT NULL,
+                  score INTEGER,
+                  priority TEXT,
+                  extraction_success INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE seo_audits (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  lead_id INTEGER NOT NULL,
+                  site_score INTEGER NOT NULL,
+                  pages_with_thin_content INTEGER NOT NULL DEFAULT 0
+                );
+                """
+            )
+            init_db(connection)
+            cols = {
+                r["name"]
+                for r in connection.execute("PRAGMA table_info(seo_audits)").fetchall()
+            }
+            self.assertIn("pages_with_mixed_content", cols)
         finally:
             connection.close()
 

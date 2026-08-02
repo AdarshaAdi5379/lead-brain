@@ -39,6 +39,7 @@ def audit_page(
         og_description_present=evidence.og_description_present,
         twitter_card_present=evidence.twitter_card_present,
         internal_link_count=evidence.internal_link_count,
+        mixed_content_count=evidence.mixed_content_count,
         issues=tuple(issues),
         score=score,
         health=health_for_score(score),

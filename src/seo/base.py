@@ -109,6 +109,7 @@ class PageSeoAudit:
     og_description_present: bool
     twitter_card_present: bool
     internal_link_count: int
+    mixed_content_count: int = 0
     issues: tuple[SeoIssue, ...] = field(default_factory=tuple)
     score: int = 100
     health: str = "Excellent"
@@ -140,6 +141,7 @@ class PageSeoAudit:
             "og_description_present": int(self.og_description_present),
             "twitter_card_present": int(self.twitter_card_present),
             "internal_link_count": self.internal_link_count,
+            "mixed_content_count": self.mixed_content_count,
             "issues_json": _issues_to_json(self.issues),
             "score": self.score,
             "health": self.health,
@@ -164,6 +166,7 @@ class SiteSeoAudit:
     pages_with_duplicate_titles: int
     pages_with_duplicate_descriptions: int
     pages_with_thin_content: int
+    pages_with_mixed_content: int
     robots_txt_detected: bool
     sitemap_detected: bool
     severity_summary: tuple[SeoIssue, ...] = field(default_factory=tuple)
@@ -187,6 +190,7 @@ class SiteSeoAudit:
             "pages_with_duplicate_titles": self.pages_with_duplicate_titles,
             "pages_with_duplicate_descriptions": self.pages_with_duplicate_descriptions,
             "pages_with_thin_content": self.pages_with_thin_content,
+            "pages_with_mixed_content": self.pages_with_mixed_content,
             "robots_txt_detected": int(self.robots_txt_detected),
             "sitemap_detected": int(self.sitemap_detected),
             "severity_summary": [issue.to_dict() for issue in self.severity_summary],

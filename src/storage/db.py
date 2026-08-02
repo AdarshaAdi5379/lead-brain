@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS seo_audits (
   pages_with_duplicate_titles INTEGER NOT NULL DEFAULT 0,
   pages_with_duplicate_descriptions INTEGER NOT NULL DEFAULT 0,
   pages_with_thin_content INTEGER NOT NULL DEFAULT 0,
+  pages_with_mixed_content INTEGER NOT NULL DEFAULT 0,
   robots_txt_detected INTEGER NOT NULL DEFAULT 0,
   sitemap_detected INTEGER NOT NULL DEFAULT 0,
   severity_summary TEXT NOT NULL DEFAULT '[]',
@@ -178,6 +179,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_lead_scores_lead_id
 
 CREATE INDEX IF NOT EXISTS ix_lead_scores_final_score
   ON lead_scores(final_score);
+
+CREATE TABLE IF NOT EXISTS business_opportunities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  label TEXT NOT NULL,
+  score INTEGER NOT NULL,
+  severity TEXT NOT NULL,
+  confidence INTEGER NOT NULL DEFAULT 0,
+  priority TEXT NOT NULL DEFAULT '',
+  business_impact TEXT NOT NULL DEFAULT '',
+  implementation_effort TEXT NOT NULL DEFAULT '',
+  recommended_services_json TEXT NOT NULL DEFAULT '[]',
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS ix_business_opportunities_lead_id
+  ON business_opportunities(lead_id);
+
+CREATE INDEX IF NOT EXISTS ix_business_opportunities_category
+  ON business_opportunities(category);
 """
 
 
@@ -222,3 +246,9 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             connection.execute(
                 f"ALTER TABLE leads ADD COLUMN {column} {column_type}"
             )
+
+    seo_columns = {r["name"] for r in connection.execute("PRAGMA table_info(seo_audits)").fetchall()}
+    if "pages_with_mixed_content" not in seo_columns:
+        connection.execute(
+            "ALTER TABLE seo_audits ADD COLUMN pages_with_mixed_content INTEGER NOT NULL DEFAULT 0"
+        )

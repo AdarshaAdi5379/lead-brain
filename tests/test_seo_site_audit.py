@@ -149,6 +149,27 @@ class TestSiteAudit(unittest.TestCase):
         self.assertEqual(audit.total_pages_audited, 0)
         self.assertEqual(audit.site_score, 100)
 
+    def test_mixed_content_pages_aggregated(self) -> None:
+        good = _good_page("https://example.com/", homepage=True)
+        with_mixed = SimpleNamespace(
+            url="https://example.com/contact",
+            label="PAGE",
+            title="Acme Plumbing | Contact",
+            text=LONG_TEXT,
+            html=(
+                "<html><head><title>Acme Plumbing | Contact</title>"
+                '<meta name="description" content="' + "d" * 120 + '">'
+                "</head><body><h1>Contact</h1><p>"
+                f"{LONG_TEXT}</p><img src=\"http://cdn.example.com/pic.jpg\"></body></html>"
+            ),
+        )
+        audit = audit_site([good, with_mixed], "https://example.com/")
+
+        self.assertEqual(audit.pages_with_mixed_content, 1)
+        page_audits = {page.url: page for page in audit.pages}
+        self.assertEqual(page_audits["https://example.com/contact"].mixed_content_count, 1)
+        self.assertEqual(page_audits["https://example.com/"].mixed_content_count, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

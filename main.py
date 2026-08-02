@@ -27,6 +27,8 @@ from src.fingerprinting.base import PLATFORM_FROM_TECHNOLOGY, Detection
 from src.fingerprinting.detector import FingerprintResult, TechnologyDetector, build_site_evidence
 from src.fingerprinting.report import summary_csv_fields
 from src.llm_extraction import extract_lead_from_fetch, extract_lead_from_merged_content
+from src.opportunities import detect_opportunities
+from src.opportunities.report import csv_fields_from_rows as opportunity_csv_fields_from_rows
 from src.scoring import ScoringInputs, score_lead, score_site_lead
 from src.scoring.report import csv_fields_from_row as score_csv_fields_from_row
 from src.scraping.focused_crawler import CrawlResult, FocusedCrawler
@@ -44,6 +46,10 @@ from src.settings import (
 from src.storage.db import connect, init_db
 from src.storage.leads import LeadUpsert, upsert_lead
 from src.storage.normalization import normalize_url_for_dedupe
+from src.storage.opportunities import (
+    opportunities_for_run as lead_opportunities_for_run,
+)
+from src.storage.opportunities import replace_opportunities
 from src.storage.runs import RunStats, complete_run, start_run, update_run_stats
 from src.storage.scores import replace_score as replace_lead_score
 from src.storage.scores import scores_for_run as lead_scores_for_run
@@ -95,6 +101,13 @@ EXPORT_COLUMNS = [
     "top_positive_reasons",
     "top_negative_reasons",
     "recommended_outreach_angle",
+    "opportunity_score",
+    "opportunity_priority",
+    "top_opportunity",
+    "recommended_services",
+    "business_impact",
+    "implementation_effort",
+    "opportunity_count",
 ]
 
 
@@ -449,30 +462,29 @@ def _run_seeds(
 
                 # Deterministic multi-dimensional scoring. Pure local logic
                 # over already-collected signals; the LLM never scores leads.
+                signals = ScoringInputs(
+                    extracted=extracted,
+                    business_name=extracted.get("business_name") or seed.business_name or None,
+                    category=seed.category or None,
+                    city=seed.city or None,
+                    state=seed.state or None,
+                    address=seed.address or None,
+                    source=seed.source or None,
+                    osm_id=seed.osm_id or None,
+                    website_url=seed.url or None,
+                    fetch_ok=fetch.success,
+                    last_error=extracted.get("last_error"),
+                    detections=(
+                        [d.to_dict() for d in fingerprint.detections]
+                        if fingerprint and fingerprint.detections
+                        else None
+                    ),
+                    crawl=_crawl_summary(crawl),
+                    seo_audit=seo_audit.to_dict() if seo_audit is not None else None,
+                )
                 lead_score = None
                 try:
-                    lead_score = score_site_lead(
-                        ScoringInputs(
-                            extracted=extracted,
-                            business_name=extracted.get("business_name") or seed.business_name or None,
-                            category=seed.category or None,
-                            city=seed.city or None,
-                            state=seed.state or None,
-                            address=seed.address or None,
-                            source=seed.source or None,
-                            osm_id=seed.osm_id or None,
-                            website_url=seed.url or None,
-                            fetch_ok=fetch.success,
-                            last_error=extracted.get("last_error"),
-                            detections=(
-                                [d.to_dict() for d in fingerprint.detections]
-                                if fingerprint and fingerprint.detections
-                                else None
-                            ),
-                            crawl=_crawl_summary(crawl),
-                            seo_audit=seo_audit.to_dict() if seo_audit is not None else None,
-                        )
-                    )
+                    lead_score = score_site_lead(signals)
                     logger.info(
                         "Scored %s: %d/100 (%s)",
                         seed.url,
@@ -483,6 +495,24 @@ def _run_seeds(
                     logger.debug("Scoring failed for %s: %s", seed.url, exc)
                     fallback = score_lead(extracted, site_seo_score=seo_audit.site_score if seo_audit is not None else None, seo_blend_weight=SEO_BLEND_WEIGHT)
                     lead_score = _fallback_lead_score(fallback)
+
+                # Deterministic business opportunity detection. Same pure
+                # local model over the same signals; never breaks the
+                # pipeline and never uses the LLM.
+                opportunity_report = None
+                try:
+                    opportunity_report = detect_opportunities(
+                        signals, lead_score=lead_score
+                    )
+                    logger.info(
+                        "Opportunities for %s: %d (top: %s, %d/100)",
+                        seed.url,
+                        opportunity_report.opportunity_count,
+                        opportunity_report.top_opportunity or "none",
+                        opportunity_report.top_opportunity_score,
+                    )
+                except Exception as exc:
+                    logger.debug("Opportunity detection failed for %s: %s", seed.url, exc)
 
                 lead = LeadUpsert(
                     website_url=seed.url,
@@ -545,6 +575,15 @@ def _run_seeds(
                             replace_lead_score(connection, lead_id, lead_score)
                     except Exception as exc:
                         logger.debug("Could not persist score for %s: %s", seed.url, exc)
+
+                if opportunity_report is not None and opportunity_report.opportunities:
+                    try:
+                        normalized = normalize_url_for_dedupe(seed.url) if seed.url else ""
+                        lead_id = get_lead_id_by_url(connection, normalized) if normalized else None
+                        if lead_id is not None:
+                            replace_opportunities(connection, lead_id, opportunity_report)
+                    except Exception as exc:
+                        logger.debug("Could not persist opportunities for %s: %s", seed.url, exc)
 
                 usage = extracted.get("_usage")
                 cost = estimate_cost(usage) if usage is not None else None
@@ -888,6 +927,11 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
         int(row["lead_id"]): row for row in lead_scores_for_run(connection, run_id)
     }
 
+    # Merge per-lead detected business opportunities.
+    opportunities_by_lead: dict[int, list[dict]] = {}
+    for row in lead_opportunities_for_run(connection, run_id):
+        opportunities_by_lead.setdefault(int(row["lead_id"]), []).append(row)
+
     with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS)
         writer.writeheader()
@@ -932,6 +976,13 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
             record["top_positive_reasons"] = ""
             record["top_negative_reasons"] = ""
             record["recommended_outreach_angle"] = ""
+            record["opportunity_score"] = ""
+            record["opportunity_priority"] = ""
+            record["top_opportunity"] = ""
+            record["recommended_services"] = ""
+            record["business_impact"] = ""
+            record["implementation_effort"] = ""
+            record["opportunity_count"] = ""
             # Match the lead by its normalized URL (as stored by upsert).
             normalized = record.get("website_url") or ""
             lead_id = lead_id_by_normalized.get(normalize_url_for_dedupe(normalized))
@@ -947,6 +998,10 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
                     for key, value in score_csv_fields_from_row(score_row).items():
                         record[key] = value
                     record["recommendation"] = record["recommended_outreach_angle"]
+                opportunity_rows = opportunities_by_lead.get(lead_id)
+                if opportunity_rows:
+                    for key, value in opportunity_csv_fields_from_rows(opportunity_rows).items():
+                        record[key] = value
             writer.writerow({k: record.get(k) for k in EXPORT_COLUMNS})
 
     return out_path

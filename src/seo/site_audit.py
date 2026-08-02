@@ -121,6 +121,7 @@ def audit_site(
     pages_with_json_ld = sum(1 for a in html_pages if a.json_ld_present)
     pages_with_images_missing_alt = sum(1 for a in html_pages if a.images_missing_alt_count > 0)
     pages_with_thin_content = sum(1 for a in html_pages if _has_issue(a, "thin_content"))
+    pages_with_mixed_content = sum(1 for a in html_pages if a.mixed_content_count > 0)
 
     pages_with_duplicate_titles = _duplicate_pages(
         html_pages, key=lambda a: a.title if a.title_present else None
@@ -154,6 +155,7 @@ def audit_site(
             pages_with_duplicate_titles=0,
             pages_with_duplicate_descriptions=0,
             pages_with_thin_content=0,
+            pages_with_mixed_content=0,
             robots_txt_detected=robots_txt_detected,
             sitemap_detected=sitemap_detected,
             severity_summary=(),
@@ -194,6 +196,7 @@ def audit_site(
         pages_with_duplicate_titles=pages_with_duplicate_titles,
         pages_with_duplicate_descriptions=pages_with_duplicate_descriptions,
         pages_with_thin_content=pages_with_thin_content,
+        pages_with_mixed_content=pages_with_mixed_content,
         robots_txt_detected=robots_txt_detected,
         sitemap_detected=sitemap_detected,
         severity_summary=tuple(ordered_issues),

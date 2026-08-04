@@ -83,6 +83,53 @@ Inspect screenshots in the Lead detail view, or filter leads by **Visual health*
 **min visual score**, and per-signal flags (weak mobile, clutter, weak CTA, strong
 branding) in the dashboard sidebar.
 
+## Local semantic search (AI Search)
+
+After each run, the pipeline **incrementally indexes** every lead's collected
+intelligence (business info, technologies, SEO, visual, opportunities, scoring)
+into `lead_embeddings` as one semantic document per lead — fully local and
+offline, no API key required. Unchanged leads are skipped via content hashing;
+`--no-index` skips indexing, `--rebuild-index` drops and rebuilds the whole
+index.
+
+```bash
+# Search the index directly (acceptance check: "restaurants with poor SEO"):
+python -c "
+from pathlib import Path
+from src.search.search_service import SearchService
+from src.search.query import SearchQuery
+svc = SearchService(Path('data/leads.sqlite'))
+for r in svc.search(SearchQuery(text='restaurants with poor SEO', top_k=10)):
+    print(r.business_name, r.lead_score, r.seo_score, r.priority)
+"
+```
+
+Three search modes (`hybrid` default / `semantic` / `keyword`), combined with
+whitelisted filters (category, city, state, country, platform, priority,
+technologies, website present, SEO/lead/visual/opportunity score ranges), a
+"Find similar businesses" (top-10, excludes self), and a neutral per-lead **AI
+context** block for a future chat/outreach assistant. Use it from the
+dashboard's **AI Search** page.
+
+Default engine: deterministic `hash-ngram-512` embedder + SQLite brute-force
+cosine store (numpy-accelerated) — no dependencies. Optional upgrade to
+sentence-transformers embeddings and a ChromaDB accelerator:
+
+```bash
+pip install -r requirements-search.txt
+# .env: SEARCH_EMBEDDER=sentence  SEARCH_VECTOR_STORE=chroma   (or rely on "auto")
+```
+
+Tunables (env / `src/settings.py`): `SEARCH_ENABLED` (default true),
+`SEARCH_EMBEDDER` (`auto|hash|sentence`), `SEARCH_EMBEDDING_MODEL`
+(`all-MiniLM-L6-v2`, fallback `bge-small-en-v1.5`), `SEARCH_EMBEDDING_DEVICE`
+(`cpu`), `SEARCH_HASH_DIMENSIONS` (512), `SEARCH_VECTOR_STORE`
+(`auto|sqlite|chroma`), `SEARCH_CHROMA_DIR` (`data/chroma`, gitignored),
+`SEARCH_BATCH_SIZE` (32), `SEARCH_TOP_K` (20), `SEARCH_HYBRID_WEIGHT` (0.7),
+`SEARCH_RANK_WEIGHT_SIMILARITY/LEAD/OPPORTUNITY/RECENCY` (0.5/0.25/0.15/0.10),
+`SEARCH_MAX_QUERY_CHARS` (500). Switching the embedder invalidates the cache and
+re-indexes automatically.
+
 ## Run pipeline
 
 ```bash

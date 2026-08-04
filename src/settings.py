@@ -92,3 +92,40 @@ VISUAL_SCREENSHOT_DIR: Path = PROJECT_ROOT / os.environ.get("VISUAL_SCREENSHOT_D
 # Optional multimodal summarizer (gated: off by default, no API key needed).
 VISUAL_LLM_ENABLED: bool = os.environ.get("VISUAL_LLM_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 VISUAL_LLM_MODEL: str = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
+
+# Local semantic search + AI knowledge base (Phase 14). Fully local, offline,
+# no cloud and no paid APIs. Default engine is dependency-free: a deterministic
+# hashing-n-gram embedder + SQLite vector store. When sentence-transformers
+# and/or chromadb are installed they are used automatically (SEARCH_EMBEDDER /
+# SEARCH_VECTOR_STORE = "auto").
+# Master switch: when off, the pipeline never indexes and search is unavailable.
+SEARCH_ENABLED: bool = os.environ.get("SEARCH_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+# Embedder backend: "auto" (sentence-transformers if importable, else hash),
+# "hash" (pure stdlib, always works), "sentence" (requires the optional package).
+SEARCH_EMBEDDER: str = os.environ.get("SEARCH_EMBEDDER", "auto").strip().lower()
+SEARCH_EMBEDDING_MODEL: str = os.environ.get("SEARCH_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+SEARCH_EMBEDDING_MODEL_FALLBACK: str = os.environ.get(
+    "SEARCH_EMBEDDING_MODEL_FALLBACK", "bge-small-en-v1.5"
+)
+SEARCH_EMBEDDING_DEVICE: str = os.environ.get("SEARCH_EMBEDDING_DEVICE", "cpu")
+# Feature-space size for the deterministic hashing embedder.
+SEARCH_HASH_DIMENSIONS: int = int(os.environ.get("SEARCH_HASH_DIMENSIONS", "512"))
+# Vector store backend: "auto" (chromadb if importable, else sqlite),
+# "sqlite" (pure stdlib, default), "chroma" (requires the optional package).
+SEARCH_VECTOR_STORE: str = os.environ.get("SEARCH_VECTOR_STORE", "auto").strip().lower()
+SEARCH_CHROMA_DIR: Path = PROJECT_ROOT / os.environ.get("SEARCH_CHROMA_DIR", "data/chroma")
+# Batch size for embedding generation (both backends).
+SEARCH_BATCH_SIZE: int = int(os.environ.get("SEARCH_BATCH_SIZE", "32"))
+# Default number of results per search / similarity call.
+SEARCH_TOP_K: int = int(os.environ.get("SEARCH_TOP_K", "20"))
+# Share of semantic (vector) similarity in hybrid search scores (0-1); the
+# remainder goes to keyword overlap.
+SEARCH_HYBRID_WEIGHT: float = float(os.environ.get("SEARCH_HYBRID_WEIGHT", "0.7"))
+# Deterministic final-ranking weights (must sum to 1): similarity, lead score,
+# opportunity score, recency.
+SEARCH_RANK_WEIGHT_SIMILARITY: float = float(os.environ.get("SEARCH_RANK_WEIGHT_SIMILARITY", "0.5"))
+SEARCH_RANK_WEIGHT_LEAD: float = float(os.environ.get("SEARCH_RANK_WEIGHT_LEAD", "0.25"))
+SEARCH_RANK_WEIGHT_OPPORTUNITY: float = float(os.environ.get("SEARCH_RANK_WEIGHT_OPPORTUNITY", "0.15"))
+SEARCH_RANK_WEIGHT_RECENCY: float = float(os.environ.get("SEARCH_RANK_WEIGHT_RECENCY", "0.10"))
+# Hard cap on raw user-query length (safety).
+SEARCH_MAX_QUERY_CHARS: int = int(os.environ.get("SEARCH_MAX_QUERY_CHARS", "500"))

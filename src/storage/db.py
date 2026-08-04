@@ -256,6 +256,22 @@ CREATE INDEX IF NOT EXISTS ix_business_opportunities_lead_id
 
 CREATE INDEX IF NOT EXISTS ix_business_opportunities_category
   ON business_opportunities(category);
+
+CREATE TABLE IF NOT EXISTS lead_embeddings (
+  lead_id INTEGER PRIMARY KEY,
+  document_hash TEXT NOT NULL,
+  embedding_hash TEXT NOT NULL,
+  embedder_id TEXT NOT NULL,
+  document_text TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  embedding_json TEXT NOT NULL DEFAULT '[]',
+  embedding_dim INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS ix_lead_embeddings_updated_at
+  ON lead_embeddings(updated_at);
 """
 
 

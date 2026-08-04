@@ -1,0 +1,16 @@
+# Optional dependencies for the local semantic search engine (Phase 14).
+#
+# The engine works out of the box with zero extra dependencies: the
+# deterministic HashingEmbedder (pure stdlib) and the SQLite vector store are
+# the defaults. Install these only when you want the higher-quality
+# sentence-transformers embeddings and the ChromaDB ANN accelerator.
+#
+#   pip install -r requirements-search.txt
+#
+# Then opt in via .env:
+#   SEARCH_EMBEDDER=sentence
+#   SEARCH_VECTOR_STORE=chroma
+# "auto" (the default) picks them up automatically when importable.
+
+sentence-transformers>=2.7
+chromadb>=0.5.5

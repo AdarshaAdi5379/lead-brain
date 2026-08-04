@@ -33,6 +33,8 @@ from src.scoring import ScoringInputs, score_lead, score_site_lead
 from src.scoring.report import csv_fields_from_row as score_csv_fields_from_row
 from src.scraping.focused_crawler import CrawlResult, FocusedCrawler
 from src.scraping.page_cache import PageCache
+from src.search.config import from_settings as search_config_from_settings
+from src.search.search_service import SearchService
 from src.seo.report import csv_fields_from_row, to_llm_text
 from src.seo.site_audit import audit_site, probe_well_known
 from src.settings import (
@@ -153,6 +155,17 @@ def main() -> None:
     if args.clear_crawl_cache:
         logger.info("Cleared crawl page cache entries: %d", PageCache(CRAWL_CACHE_DIR, CRAWL_CACHE_FILE).clear())
 
+    if args.rebuild_index and not (args.discover or args.input or args.only_failed):
+        stats = _rebuild_search_index(logger)
+        logger.info(
+            "Search index rebuilt: %d indexed, %d skipped (of %d)",
+            stats.indexed,
+            stats.skipped,
+            stats.total,
+        )
+        logger.info("Run complete.")
+        return
+
     if args.discover:
         if args.provider == "google":
             logger.warning(
@@ -262,6 +275,17 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Clear the persisted page cache used by the focused crawler",
     )
+    parser.add_argument(
+        "--rebuild-index",
+        action="store_true",
+        help="Rebuild the full local semantic search index (after processing, "
+        "or standalone when no pipeline mode is given)",
+    )
+    parser.add_argument(
+        "--no-index",
+        action="store_true",
+        help="Skip incremental search indexing for this run",
+    )
     return parser
 
 
@@ -298,6 +322,9 @@ def _run_pipeline(connection, logger, seeds: list[SeedRow], args) -> None:
         min_score=args.min_score_export,
     )
     logger.info("Run %s complete. Export: %s", run_id, export_path)
+
+    if not args.no_index:
+        _index_run_leads(logger, run_id, rebuild=args.rebuild_index)
 
 
 def _process_seeds_through_pipeline(connection, logger, seeds, args) -> None:
@@ -1129,6 +1156,43 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
             writer.writerow({k: record.get(k) for k in EXPORT_COLUMNS})
 
     return out_path
+
+
+def _index_run_leads(logger, run_id: int, *, rebuild: bool = False) -> None:
+    """Incrementally update the local semantic search index for a pipeline run.
+
+    Indexing is a best-effort stage: any failure is logged and never breaks the
+    run. Content-hash diffing means unchanged leads are skipped without any
+    embedding work (see src/search/search_service.py).
+    """
+    try:
+        config = search_config_from_settings(settings_module)
+        if not config.enabled:
+            logger.info("Search indexing disabled (SEARCH_ENABLED=0); skipping")
+            return
+        service = SearchService(DB_PATH, config=config)
+        stats = service.rebuild_index() if rebuild else service.index_run(run_id)
+        logger.info(
+            "Search index for run %s: %d indexed, %d skipped (of %d) via %s",
+            run_id,
+            stats.indexed,
+            stats.skipped,
+            stats.total,
+            service.embedder.name,
+        )
+    except Exception as exc:
+        logger.debug("Search indexing failed for run %s: %s", run_id, exc)
+
+
+def _rebuild_search_index(logger):
+    """Rebuild the entire search index (all leads in the database)."""
+    config = search_config_from_settings(settings_module)
+    if not config.enabled:
+        logger.info("Search indexing disabled (SEARCH_ENABLED=0); skipping")
+        from src.search.search_service import IndexStats
+
+        return IndexStats(total=0, indexed=0, skipped=0)
+    return SearchService(DB_PATH, config=config).rebuild_index()
 
 
 def _load_failed_seeds_from_db(connection, *, limit: int) -> list[SeedRow]:

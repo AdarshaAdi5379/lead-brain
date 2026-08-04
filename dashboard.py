@@ -35,6 +35,18 @@ except Exception:  # pragma: no cover
     px = None  # type: ignore
 
 
+try:  # Optional (local semantic search engine, Phase 14)
+    from src.search.config import from_settings as search_config_from_settings
+    from src.search.query import SearchError, SearchQuery
+    from src.search.search_service import SearchResult, SearchService
+except Exception:  # pragma: no cover
+    search_config_from_settings = None  # type: ignore
+    SearchError = ValueError  # type: ignore
+    SearchQuery = None  # type: ignore
+    SearchResult = None  # type: ignore
+    SearchService = None  # type: ignore
+
+
 @dataclass(frozen=True)
 class LeadRow:
     id: int
@@ -71,6 +83,11 @@ def main() -> None:
 
     if not db_path.exists():
         st.info("Database not initialized. Run a discovery search above to create it.")
+        return
+
+    page = st.sidebar.radio("Page", ["Leads", "AI Search"], key="page_select")
+    if page == "AI Search":
+        _render_search_page(db_path)
         return
 
     all_rows: list[LeadRow] = []
@@ -1031,6 +1048,235 @@ def _render_discover_section(db_path: Path) -> None:
 def _check_google_places_key() -> bool:
     from src.settings import GOOGLE_MAPS_API_KEY
     return bool(GOOGLE_MAPS_API_KEY)
+
+
+# --- AI Search page (Phase 14, local semantic search) ------------------------
+
+
+def _render_search_page(db_path: Path) -> None:
+    """AI Search: natural-language queries over the local semantic index."""
+    st.header("AI Search")
+
+    if SearchService is None:
+        st.info("The search engine is not available in this environment.")
+        return
+
+    try:
+        config = search_config_from_settings()
+    except Exception as exc:
+        st.error(f"Search configuration failed: {exc}")
+        return
+
+    if not config.enabled:
+        st.info("Search is disabled (SEARCH_ENABLED=0). Enable it in .env to use AI Search.")
+        return
+
+    try:
+        service = SearchService(db_path, config=config)
+    except Exception as exc:
+        st.error(f"Could not initialize the search engine: {exc}")
+        return
+
+    _render_search_sidebar(service)
+
+    query_text = st.text_input(
+        "Search leads in plain language",
+        placeholder='e.g. "restaurants with poor SEO", "plumbers using WordPress", "weak branding"',
+        key="ai_query",
+    )
+    mode = st.radio(
+        "Search mode",
+        options=["hybrid", "semantic", "keyword"],
+        index=0,
+        horizontal=True,
+        key="ai_mode",
+        help="Hybrid combines semantic similarity with keyword overlap.",
+    )
+    search_clicked = st.button("Search", type="primary", key="ai_search_button")
+
+    if search_clicked and query_text.strip():
+        try:
+            results = service.search(
+                SearchQuery(text=query_text, mode=mode, top_k=20, filters=_search_filters())
+            )
+            st.session_state["ai_results"] = results
+            st.session_state["ai_results_for"] = query_text
+            st.session_state.pop("ai_similar_for", None)
+        except (SearchError, ValueError) as exc:
+            st.error(str(exc))
+            return
+
+    results = st.session_state.get("ai_results")
+    if results is None:
+        st.caption(
+            "The index currently holds "
+            f"**{service.count()}** leads (embedder: {service.embedder.name}). "
+            "Type a query above to search."
+        )
+        return
+
+    st.markdown(f"**{len(results)} results** for “{st.session_state.get('ai_results_for', '')}”")
+    for result in results:
+        _render_search_result_card(service, result)
+
+    similar_for = st.session_state.get("ai_similar_for")
+    if similar_for is not None:
+        st.divider()
+        st.subheader(f"Similar businesses to lead #{similar_for}")
+        try:
+            similar = service.similar(int(similar_for), top_k=10)
+            if not similar:
+                st.caption("No similar leads found.")
+            for result in similar:
+                _render_search_result_card(service, result)
+        except (SearchError, ValueError) as exc:
+            st.error(str(exc))
+
+
+def _render_search_sidebar(service: SearchService) -> None:
+    st.sidebar.subheader("AI Search filters")
+    db_path = getattr(service, "_db_path", None)
+    if db_path is None:
+        return
+    with _connect(db_path) as connection:
+        distinct = {
+            "category": _distinct_values(connection, "category"),
+            "city": _distinct_values(connection, "city"),
+            "state": _distinct_values(connection, "state"),
+            "country": _distinct_values(connection, "country"),
+            "platform": _distinct_values(connection, "platform"),
+        }
+        technologies = _distinct_technologies(connection)
+
+    st.sidebar.multiselect("Category", distinct["category"], key="ai_f_category")
+    st.sidebar.multiselect("Platform", distinct["platform"], key="ai_f_platform")
+    st.sidebar.multiselect("City", distinct["city"], key="ai_f_city")
+    st.sidebar.multiselect("State", distinct["state"], key="ai_f_state")
+    st.sidebar.multiselect("Country", distinct["country"], key="ai_f_country")
+    st.sidebar.selectbox(
+        "Priority",
+        options=["", "Hot", "Warm", "Cold", "Avoid"],
+        format_func=lambda v: v or "Any",
+        key="ai_f_priority",
+    )
+    st.sidebar.checkbox("Only leads with a website", key="ai_f_website")
+    st.sidebar.multiselect("Has technology (name)", technologies, key="ai_f_tech")
+
+    st.sidebar.subheader("Score ranges")
+    st.sidebar.slider("SEO score", 0, 100, (0, 100), key="ai_f_seo")
+    st.sidebar.slider("Lead score", 0, 100, (0, 100), key="ai_f_lead")
+    st.sidebar.slider("Visual score", 0, 100, (0, 100), key="ai_f_visual")
+    st.sidebar.slider("Opportunity score", 0, 100, (0, 100), key="ai_f_opp")
+
+    st.sidebar.divider()
+    st.sidebar.markdown("**Index**")
+    stats = service.stats()
+    st.sidebar.caption(
+        f"{stats['count']} leads indexed · {stats['embedder']} · {stats['vector_store']}"
+    )
+    if st.sidebar.button("Rebuild index", key="ai_rebuild"):
+        stats = service.rebuild_index()
+        st.sidebar.success(f"Rebuilt: {stats.indexed} indexed, {stats.skipped} skipped.")
+        st.rerun()
+
+
+def _search_filters() -> dict[str, Any]:
+    filters: dict[str, Any] = {}
+
+    def _multi(key: str, target: str) -> None:
+        selected = st.session_state.get(key) or []
+        if selected:
+            filters[target] = list(selected)
+
+    _multi("ai_f_category", "category")
+    _multi("ai_f_platform", "platform")
+    _multi("ai_f_city", "city")
+    _multi("ai_f_state", "state")
+    _multi("ai_f_country", "country")
+
+    tech = st.session_state.get("ai_f_tech") or []
+    if tech:
+        filters["technologies"] = list(tech)
+
+    priority = st.session_state.get("ai_f_priority")
+    if priority:
+        filters["priority"] = priority
+
+    if st.session_state.get("ai_f_website"):
+        filters["website_present"] = True
+
+    for key, target in (
+        ("ai_f_seo", "seo_score"),
+        ("ai_f_lead", "lead_score"),
+        ("ai_f_visual", "visual_score"),
+        ("ai_f_opp", "opportunity_score"),
+    ):
+        low, high = st.session_state.get(key) or (0, 100)
+        if int(low) > 0 or int(high) < 100:
+            filters[target] = {"min": int(low), "max": int(high)}
+    return filters
+
+
+def _render_search_result_card(service: SearchService, result: Any) -> None:
+    with st.container(border=True):
+        title = result.business_name or f"Lead #{result.lead_id}"
+        location = ", ".join(
+            [p for p in (result.city, result.state, result.country) if p]
+        )
+        st.markdown(f"**{title}**  ·  {result.priority or '—'} · {result.category or ''}")
+        if location:
+            st.caption(location)
+
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Similarity", f"{result.similarity * 100:.0f}%")
+        col2.metric("Lead score", _metric_value(result.lead_score))
+        col3.metric("Opportunity", _metric_value(result.opportunity_score))
+        col4.metric("SEO", _metric_value(result.seo_score))
+        col5.metric("Visual", _metric_value(result.visual_score))
+
+        st.caption(f"Platform: {result.platform or 'unknown'} · Rank score: {result.combined_score:.3f}")
+        if result.top_reasons:
+            st.markdown("**Top reasons**")
+            for reason in result.top_reasons[:3]:
+                st.markdown(f"- {reason}")
+        if result.website_url:
+            st.markdown(f"[Open website]({result.website_url})")
+
+        col_a, col_b, col_c = st.columns(3)
+        if col_a.button("Find similar businesses", key=f"ai_similar_{result.lead_id}"):
+            st.session_state["ai_similar_for"] = result.lead_id
+        if col_b.button("AI context", key=f"ai_context_{result.lead_id}"):
+            st.session_state["ai_context_for"] = result.lead_id
+        if col_c.button("Copy business name", key=f"ai_copy_{result.lead_id}"):
+            st.toast(f"Copied {title}", icon="📋")
+
+    if st.session_state.get("ai_context_for") == result.lead_id:
+        context = service.context_text_for_lead(result.lead_id)
+        with st.expander(f"AI context for {title}", expanded=True):
+            if context:
+                st.markdown(context)
+            else:
+                st.caption("No context available.")
+
+
+def _metric_value(value: Any) -> str:
+    return "—" if value is None else str(int(value))
+
+
+def _distinct_values(connection: sqlite3.Connection, column: str) -> list[str]:
+    rows = connection.execute(
+        f"SELECT DISTINCT {column} FROM leads "
+        f"WHERE {column} IS NOT NULL AND {column} != '' ORDER BY 1"
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def _distinct_technologies(connection: sqlite3.Connection) -> list[str]:
+    rows = connection.execute(
+        "SELECT DISTINCT technology_name FROM technology_detections "
+        "WHERE technology_name IS NOT NULL ORDER BY 1"
+    ).fetchall()
+    return [str(row[0]) for row in rows]
 
 
 if __name__ == "__main__":

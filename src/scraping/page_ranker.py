@@ -167,6 +167,33 @@ def rank_pages(links: list[Link]) -> list[Link]:
     return [link for link, _, _ in scored]
 
 
+_CONTACT_TOKENS = {"contact", "contacts", "contact-us", "contactus", "get-in-touch"}
+
+
+def find_contact_links(links: list[Link]) -> list[Link]:
+    """Links that clearly point at a contact page, in original order.
+
+    Matches on the fully-slugified path, its tokens, or the anchor text so
+    variants like /contact, /contact-us, Contact Us or Get in Touch are all
+    recognised. The crawler uses this to guarantee a contact page is always
+    visited first, ahead of the relevance-ranked budget.
+    """
+    matches: list[Link] = []
+    for link in links:
+        if not link.url:
+            continue
+        path_tokens = [t for t in _slugify(urlparse(link.url).path).split("-") if t]
+        anchor_slug = _slugify((link.text or "").strip().lower())
+        is_contact = (
+            _slugify(urlparse(link.url).path) in _CONTACT_TOKENS
+            or anchor_slug in _CONTACT_TOKENS
+            or bool({"contact", "contacts"} & set(path_tokens))
+        )
+        if is_contact:
+            matches.append(link)
+    return matches
+
+
 def select_pages(links: list[Link], *, max_pages: int) -> PageSelection:
     """Partition internal links into chosen + ignored boilerplate pages.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Optional
 
 from src.contact.forms import detect_contact_form
@@ -7,13 +8,13 @@ from src.contact.helpers import (
     clean_text,
     is_contact_page,
     normalize_absolute_url,
-    normalize_email,
-    normalize_phone,
     page_priority_key,
 )
 from src.contact.jsonld import extract_jsonld
+from src.contact.recovery import extract_email_candidates, extract_phone_candidates
 from src.contact.schema import ContactSignals, merge_contact_signals
 from src.contact.social import classify_social_url, extract_social_urls
+from src.contact.sources import pick_best_email, pick_best_phone
 
 
 def extract_contact_signals(
@@ -36,6 +37,11 @@ def extract_contact_signals(
     social_map, social_order = extract_social_urls(html, page_url)
     form_url = detect_contact_form(html, page_url, page_label=page_label)
 
+    email_candidates = extract_email_candidates(html)
+    phone_candidates = extract_phone_candidates(html)
+    email_best = pick_best_email(email_candidates, page_url)
+    phone_best = pick_best_phone(phone_candidates)
+
     for raw_url in structured.get("same_as") or []:
         keyword = classify_social_url(raw_url)
         normalized = normalize_absolute_url(raw_url, page_url)
@@ -53,8 +59,14 @@ def extract_contact_signals(
         postal_code=clean_text(structured.get("postal_code")),
         country=clean_text(structured.get("country")),
         opening_hours=clean_text(structured.get("opening_hours")),
-        phone=normalize_phone(structured.get("telephone")),
-        email=normalize_email(structured.get("email")),
+        phone=phone_best.value if phone_best else None,
+        email=email_best.value if email_best else None,
+        phone_source=phone_best.source if phone_best else None,
+        email_source=email_best.source if email_best else None,
+        phone_confidence=phone_best.confidence if phone_best else None,
+        email_confidence=email_best.confidence if email_best else None,
+        email_candidates=email_candidates,
+        phone_candidates=phone_candidates,
         facebook_url=social_map.get("facebook_url"),
         instagram_url=social_map.get("instagram_url"),
         linkedin_url=social_map.get("linkedin_url"),
@@ -76,20 +88,38 @@ def _page_contact(page: Any) -> Optional[ContactSignals]:
         return None
 
 
-def extract_contact_signals_from_crawl(crawl: Any) -> ContactSignals:
+def extract_contact_signals_from_crawl(crawl: Any, *, website_url: Optional[str] = None) -> ContactSignals:
     """Aggregate per-page signals across a CrawlResult.
 
     Pages are merged in priority order (homepage -> contact -> about -> rest)
-    so the most reliable page's facts win. Returns an empty set when the crawl
-    carried no pages or no per-page signals.
+    so the most reliable page's facts win, then the single best email and phone
+    are re-picked from the merged candidate pool by source rank. Returns an
+    empty set when the crawl carried no pages or no per-page signals.
     """
     if crawl is None:
         return ContactSignals()
     if getattr(crawl, "contact_signals", None) is not None:
-        return crawl.contact_signals
+        return _resolve_best(crawl.contact_signals, website_url)
     pages = list(getattr(crawl, "pages", None) or [])
     pages.sort(key=lambda page: page_priority_key(getattr(page, "label", "")))
-    return merge_contact_signals(_page_contact(page) for page in pages)
+    return _resolve_best(merge_contact_signals(_page_contact(page) for page in pages), website_url)
+
+
+def _resolve_best(signals: ContactSignals, website_url: Optional[str]) -> ContactSignals:
+    """Replace scalar email/phone with the strongest candidate overall."""
+    if not signals.email_candidates and not signals.phone_candidates:
+        return signals
+    email_best = pick_best_email(signals.email_candidates, website_url)
+    phone_best = pick_best_phone(signals.phone_candidates)
+    return replace(
+        signals,
+        email=email_best.value if email_best else signals.email,
+        phone=phone_best.value if phone_best else signals.phone,
+        email_source=email_best.source if email_best else signals.email_source,
+        phone_source=phone_best.source if phone_best else signals.phone_source,
+        email_confidence=email_best.confidence if email_best else signals.email_confidence,
+        phone_confidence=phone_best.confidence if phone_best else signals.phone_confidence,
+    )
 
 
 def extract_contact_signals_from_fetch(fetch: Any) -> ContactSignals:

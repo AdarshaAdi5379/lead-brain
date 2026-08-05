@@ -11,7 +11,7 @@ from src.scraping.content_extractor import extract_contact_clues, parse_page
 from src.scraping.content_merger import Section, merge_sections, trim_text
 from src.scraping.link_extractor import Link, extract_internal_links, normalize_page_url
 from src.scraping.page_cache import PageCache, content_hash
-from src.scraping.page_ranker import label_for_link, select_pages
+from src.scraping.page_ranker import find_contact_links, label_for_link, select_pages
 from src.settings import (
     CRAWL_CACHE_DIR,
     CRAWL_CACHE_FILE,
@@ -124,8 +124,25 @@ class FocusedCrawler:
         links = extract_internal_links(home_html, final_home_url)
         logger.info("Found %d internal links", len(links))
 
-        selection = select_pages(links, max_pages=self._max_pages - 1)
-        selected = self._exclude_homepage(selection.selected, final_home_url)
+        ranked_pages = self._max_pages - 1
+        selection = select_pages(links, max_pages=ranked_pages)
+        selected = list(self._exclude_homepage(selection.selected, final_home_url))
+
+        # A contact page always gets crawled and visited first (when one exists
+        # and fits the budget): contact facts reach our deterministic extractor
+        # even when a small max_pages would otherwise drop it from the ranked
+        # selection. Reserving a slot drops only the weakest ranked page.
+        contact_links = self._exclude_homepage(find_contact_links(links), final_home_url)
+        contact_link = contact_links[0] if contact_links else None
+        contact_url: Optional[str] = None
+        if contact_link is not None and self._max_pages > 1:
+            if contact_link.url not in {link.url for link in selected}:
+                if len(selected) >= ranked_pages:
+                    selected.pop()
+                selected.append(contact_link)
+            selected = [link for link in selected if link.url != contact_link.url]
+            selected.insert(0, contact_link)
+            contact_url = contact_link.url
         logger.info("Ranked links")
         logger.info("Selected: %s", ", ".join(label_for_link(l) for l in selected) or "(none)")
 
@@ -217,6 +234,29 @@ class FocusedCrawler:
         visited += 1  # homepage
         logger.info("Visited %d pages", visited)
         logger.info("Merged %s characters", len(merged_text))
+
+        email_values = sorted(
+            {candidate.value.lower() for record in records for candidate in record.contact.email_candidates}
+        )
+        phone_values = sorted(
+            {candidate.value for record in records for candidate in record.contact.phone_candidates}
+        )
+        used_sources = sorted(
+            {
+                candidate.source
+                for record in records
+                for candidate in (*record.contact.email_candidates, *record.contact.phone_candidates)
+            }
+        )
+        contact_line = f"; contact page: {contact_url}" if contact_url else ""
+        logger.info(
+            "Crawl result: %d pages, %d emails, %d phones, sources=%s%s",
+            visited,
+            len(email_values),
+            len(phone_values),
+            ",".join(used_sources) or "none",
+            contact_line,
+        )
 
         metadata = CrawlMetadata(
             visited_pages=visited,

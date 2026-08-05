@@ -20,6 +20,7 @@ from src.costing import estimate_cost, pricing_config
 from src.contact import ContactSignals, extract_contact_signals_from_crawl
 from src.contact.extractor import extract_contact_signals_from_fetch
 from src.contact.helpers import google_maps_url as build_google_maps_url
+from src.contact.sources import CSV, LLM, pick_across_sources
 from src.discovery.discovery import (
     DiscoveryQuery,
     discover_to_seeds,
@@ -621,11 +622,26 @@ def _run_seeds(
 
                 contact = _build_contact_fields(seed, fetch, crawl, extracted)
 
+                phone, phone_source, phone_confidence = pick_across_sources(
+                    (contact["phone"], contact["phone_source"], contact["phone_confidence"]),
+                    (extracted.get("phone"), LLM, None),
+                    (seed.phone, CSV, None),
+                )
+                email, email_source, email_confidence = pick_across_sources(
+                    (contact["email"], contact["email_source"], contact["email_confidence"]),
+                    (extracted.get("email"), LLM, None),
+                    (seed.email, CSV, None),
+                )
+
                 lead = LeadUpsert(
                     website_url=seed.url,
                     business_name=extracted.get("business_name") or seed.business_name or None,
-                    phone=extracted.get("phone") or seed.phone or contact["phone"],
-                    email=extracted.get("email") or seed.email or contact["email"],
+                    phone=phone,
+                    email=email,
+                    phone_source=phone_source,
+                    email_source=email_source,
+                    phone_confidence=phone_confidence,
+                    email_confidence=email_confidence,
                     platform=extracted.get("platform"),
                     complexity=extracted.get("complexity"),
                     load_speed=extracted.get("load_speed"),
@@ -854,6 +870,8 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
         business_name=seed.business_name or None,
         phone=seed.phone,
         email=seed.email,
+        phone_source=CSV if seed.phone else None,
+        email_source=CSV if seed.email else None,
         platform=extracted.get("platform"),
         complexity=extracted.get("complexity"),
         load_speed=extracted.get("load_speed"),
@@ -930,7 +948,7 @@ def _build_contact_fields(
     signals = ContactSignals()
     try:
         if crawl is not None and crawl.ok:
-            signals = extract_contact_signals_from_crawl(crawl)
+            signals = extract_contact_signals_from_crawl(crawl, website_url=seed.url)
         elif fetch is not None:
             signals = extract_contact_signals_from_fetch(fetch)
     except Exception as exc:
@@ -957,6 +975,10 @@ def _build_contact_fields(
         "google_maps_url": signals.google_maps_url
         or build_google_maps_url(seed.latitude, seed.longitude),
         "service_areas": signals.service_areas or None,
+        "phone_source": signals.phone_source,
+        "email_source": signals.email_source,
+        "phone_confidence": signals.phone_confidence,
+        "email_confidence": signals.email_confidence,
     }
 
 

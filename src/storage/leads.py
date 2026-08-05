@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Optional
 
+from src.contact.sources import better_contact
 from src.storage.normalization import normalize_url_for_dedupe
 from urllib.parse import quote
 
@@ -16,6 +17,10 @@ class LeadUpsert:
     business_name: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
+    phone_source: Optional[str] = None
+    email_source: Optional[str] = None
+    phone_confidence: Optional[float] = None
+    email_confidence: Optional[float] = None
     platform: Optional[str] = None
     complexity: Optional[str] = None
     load_speed: Optional[str] = None
@@ -55,6 +60,10 @@ INSERT INTO leads (
   business_name,
   phone,
   email,
+  phone_source,
+  email_source,
+  phone_confidence,
+  email_confidence,
   website_url,
   website_url_normalized,
   platform,
@@ -94,6 +103,10 @@ VALUES (
   :business_name,
   :phone,
   :email,
+  :phone_source,
+  :email_source,
+  :phone_confidence,
+  :email_confidence,
   :website_url,
   :website_url_normalized,
   :platform,
@@ -133,6 +146,10 @@ ON CONFLICT(website_url_normalized) DO UPDATE SET
   business_name = excluded.business_name,
   phone = excluded.phone,
   email = excluded.email,
+  phone_source = excluded.phone_source,
+  email_source = excluded.email_source,
+  phone_confidence = excluded.phone_confidence,
+  email_confidence = excluded.email_confidence,
   website_url = excluded.website_url,
   platform = excluded.platform,
   complexity = excluded.complexity,
@@ -229,13 +246,36 @@ def upsert_lead(connection: sqlite3.Connection, lead: LeadUpsert) -> str:
                 f"run_id {lead.run_id} does not exist in scraping_runs; create the run first"
             )
 
+    # Preservation: a weaker incoming value never overwrites a stronger stored
+    # one (same validity rules, source rank, then confidence as the source
+    # engine uses); a stronger incoming value still replaces the stored one.
+    existing = connection.execute(
+        "SELECT phone, email, phone_source, email_source, phone_confidence, email_confidence "
+        "FROM leads WHERE website_url_normalized = ?",
+        (website_url_normalized,),
+    ).fetchone()
+    if existing is not None:
+        phone, phone_source, phone_confidence = better_contact(
+            existing[0], existing[2], existing[4], lead.phone, lead.phone_source, lead.phone_confidence
+        )
+        email, email_source, email_confidence = better_contact(
+            existing[1], existing[3], existing[5], lead.email, lead.email_source, lead.email_confidence
+        )
+    else:
+        phone, phone_source, phone_confidence = lead.phone, lead.phone_source, lead.phone_confidence
+        email, email_source, email_confidence = lead.email, lead.email_source, lead.email_confidence
+
     connection.execute(
         UPSERT_SQL,
         {
             "run_id": lead.run_id,
             "business_name": lead.business_name,
-            "phone": lead.phone,
-            "email": lead.email,
+            "phone": phone,
+            "email": email,
+            "phone_source": phone_source,
+            "email_source": email_source,
+            "phone_confidence": phone_confidence,
+            "email_confidence": email_confidence,
             "website_url": lead.website_url,
             "website_url_normalized": website_url_normalized,
             "platform": lead.platform,

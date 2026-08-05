@@ -142,6 +142,23 @@ class TestFocusedCrawler(unittest.TestCase):
         second = _crawl(self._crawler(), FakeFetcher(_site()))
         self.assertEqual(first.content_hash, second.content_hash)
 
+    def test_contact_page_crawled_first(self) -> None:
+        fetcher = FakeFetcher(_site())
+        result = _crawl(self._crawler(), fetcher)
+        self.assertTrue(result.ok)
+        self.assertEqual(fetcher.calls[0], HOME)
+        self.assertEqual(fetcher.calls[1], "https://acme.example.com/contact")
+        self.assertIn("/contact", result.contact_signals.contact_page_url)
+
+    def test_contact_page_kept_when_budget_tight(self) -> None:
+        fetcher = FakeFetcher(_site())
+        result = _crawl(self._crawler(max_pages=2), fetcher)
+        self.assertTrue(result.ok)
+        self.assertLessEqual(result.metadata.visited_pages, 2)
+        labels = [page.label for page in result.pages]
+        self.assertIn("Contact", labels)
+        self.assertIn("Call 512-555-0100", result.merged_text)
+
     def test_contact_signals_attached_from_raw_html(self) -> None:
         from tests.contact_fixtures import JSONLD_HOMEPAGE
 

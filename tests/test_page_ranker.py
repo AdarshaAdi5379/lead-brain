@@ -4,6 +4,7 @@ from src.scraping.link_extractor import Link
 from src.scraping.page_ranker import (
     IGNORE_KEYWORDS,
     PRIORITY_KEYWORDS,
+    find_contact_links,
     label_for_link,
     rank_pages,
     score_link,
@@ -86,6 +87,59 @@ class TestRankAndSelect(unittest.TestCase):
     def test_zero_max_pages_selects_none(self) -> None:
         selection = select_pages([_link("/about")], max_pages=0)
         self.assertEqual(selection.selected, [])
+
+
+class TestFindContactLinks(unittest.TestCase):
+    def test_path_variants(self) -> None:
+        links = [
+            _link("/about"),
+            _link("/contact"),
+            _link("/contact-us"),
+            _link("/get-in-touch"),
+            _link("/team"),
+        ]
+        found = [link.url for link in find_contact_links(links)]
+        self.assertEqual(
+            found,
+            [
+                "https://acme.example.com/contact",
+                "https://acme.example.com/contact-us",
+                "https://acme.example.com/get-in-touch",
+            ],
+        )
+
+    def test_anchor_text_variants(self) -> None:
+        links = [
+            _link("/reach-us", text="Contact Us"),
+            _link("/about", text="About"),
+            _link("/write-us", text="Get in Touch"),
+        ]
+        found = [link.url for link in find_contact_links(links)]
+        self.assertEqual(
+            found,
+            [
+                "https://acme.example.com/reach-us",
+                "https://acme.example.com/write-us",
+            ],
+        )
+
+    def test_no_contact_links(self) -> None:
+        self.assertEqual(find_contact_links([_link("/about"), _link("/team")]), [])
+
+    def test_preserves_original_order(self) -> None:
+        links = [
+            _link("/contact"),
+            _link("/services"),
+            _link("/contact-us"),
+        ]
+        found = [link.url for link in find_contact_links(links)]
+        self.assertEqual(
+            found,
+            [
+                "https://acme.example.com/contact",
+                "https://acme.example.com/contact-us",
+            ],
+        )
 
 
 class TestLabel(unittest.TestCase):

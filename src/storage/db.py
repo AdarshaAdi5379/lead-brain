@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS leads (
   business_name TEXT,
   phone TEXT,
   email TEXT,
+  phone_source TEXT,
+  email_source TEXT,
+  phone_confidence REAL,
+  email_confidence REAL,
 
   website_url TEXT,
   website_url_normalized TEXT NOT NULL,
@@ -366,6 +370,10 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         ("next_follow_up", "TEXT"),
         ("assigned_to", "TEXT"),
         ("best_contact_method", "TEXT"),
+        ("phone_source", "TEXT"),
+        ("email_source", "TEXT"),
+        ("phone_confidence", "REAL"),
+        ("email_confidence", "REAL"),
     ]
     for column, column_type in _ADDITIVE_LEAD_COLUMNS:
         if column not in lead_columns:

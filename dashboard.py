@@ -47,6 +47,14 @@ except Exception:  # pragma: no cover
     SearchService = None  # type: ignore
 
 
+try:  # Optional (grounded chat assistant, Phase 15)
+    from src.chat.config import from_settings as chat_config_from_settings
+    from src.chat.service import ChatService
+except Exception:  # pragma: no cover
+    chat_config_from_settings = None  # type: ignore
+    ChatService = None  # type: ignore
+
+
 @dataclass(frozen=True)
 class LeadRow:
     id: int
@@ -85,9 +93,12 @@ def main() -> None:
         st.info("Database not initialized. Run a discovery search above to create it.")
         return
 
-    page = st.sidebar.radio("Page", ["Leads", "AI Search"], key="page_select")
+    page = st.sidebar.radio("Page", ["Leads", "AI Search", "AI Chat"], key="page_select")
     if page == "AI Search":
         _render_search_page(db_path)
+        return
+    if page == "AI Chat":
+        _render_chat_page(db_path)
         return
 
     all_rows: list[LeadRow] = []
@@ -1261,6 +1272,207 @@ def _render_search_result_card(service: SearchService, result: Any) -> None:
 
 def _metric_value(value: Any) -> str:
     return "—" if value is None else str(int(value))
+
+
+# --- AI Chat page (Phase 15, grounded chat assistant) ------------------------
+
+
+def _render_chat_page(db_path: Path) -> None:
+    """AI Chat: conversational questions answered from the lead database only."""
+    st.header("AI Chat")
+
+    if ChatService is None:
+        st.info("The chat assistant is not available in this environment.")
+        return
+
+    try:
+        service = ChatService(db_path, config=chat_config_from_settings())
+    except Exception as exc:
+        st.error(f"Chat initialization failed: {exc}")
+        return
+
+    if not service.config.enabled:
+        st.info("The chat assistant is disabled (CHAT_ENABLED=0). Enable it in .env to use AI Chat.")
+        return
+
+    _render_chat_sidebar(service)
+
+    st.caption(
+        "Every answer is grounded in the leads stored in the database; it never "
+        "invents data. Without a local LLM (Ollama or an OpenAI-compatible "
+        "endpoint) the assistant answers from retrieval summaries instead of "
+        "free text."
+    )
+
+    history = st.session_state.setdefault("chat_history", [])
+
+    if "chat_restored" not in st.session_state:
+        st.session_state["chat_restored"] = True
+        if "chat_session_id" not in st.session_state:
+            last = service.last_session()
+            if last:
+                st.session_state["chat_session_id"] = last
+                restored = service.load_history(last)
+                if restored:
+                    history.extend(restored)
+
+    prompt = st.chat_input(
+        'Ask about your leads — e.g. "restaurants with weak SEO" or '
+        '"which businesses should I pitch first?"'
+    )
+    if prompt:
+        st.session_state["chat_pending"] = prompt
+        st.rerun()
+
+    pending = st.session_state.pop("chat_pending", None)
+    if pending:
+        session_id = st.session_state.setdefault(
+            "chat_session_id", service.new_session()
+        )
+        response = service.ask(
+            pending,
+            session_id=session_id,
+            filters=_chat_filters(),
+        )
+        history.append({"role": "user", "content": pending})
+        history.append({"role": "assistant", "content": response})
+        st.rerun()
+
+    for turn in history:
+        if turn["role"] == "user":
+            with st.chat_message("user"):
+                st.markdown(turn["content"])
+        else:
+            _render_chat_turn(turn["content"])
+
+    if not history:
+        st.info(
+            "No questions yet. Try e.g. **“restaurants with weak SEO”**, "
+            "**“which businesses should I pitch outreach to?”**, or "
+            "**“show me the top 10 most promising leads”**."
+        )
+
+
+def _render_chat_turn(content: Any) -> None:
+    with st.chat_message("assistant"):
+        mode = getattr(content, "mode", None)
+        if mode is None:
+            st.markdown(content)
+            return
+        mode_label = mode.value.replace("_", " ") if mode is not None else "answer"
+        backend_name = getattr(content, "backend_name", None)
+        badge = mode_label
+        if backend_name:
+            badge = f"{mode_label} · {backend_name}"
+        st.markdown(f"`{badge}`")
+        st.markdown(content.answer)
+
+        sources = getattr(content, "sources", None) or []
+        if sources:
+            with st.expander(f"Sources ({len(sources)})", expanded=False):
+                for source in sources:
+                    _render_chat_source(source)
+
+
+def _render_chat_source(source: Any) -> None:
+    name = source.get("business_name") or f"Lead #{source.get('lead_id')}"
+    location = ", ".join(
+        part for part in (source.get("city"), source.get("state"), source.get("country")) if part
+    )
+    st.markdown(
+        f"**[{source.get('rank')}] {name}**" + (f" — {location}" if location else "")
+    )
+    if source.get("category"):
+        st.caption(source["category"])
+    if source.get("rationale"):
+        st.caption(source["rationale"])
+
+
+def _render_chat_sidebar(service: Any) -> None:
+    db_path = getattr(service, "_db_path", None)
+    if db_path is not None:
+        with _connect(db_path) as connection:
+            distinct = {
+                "category": _distinct_values(connection, "category"),
+                "city": _distinct_values(connection, "city"),
+                "state": _distinct_values(connection, "state"),
+                "country": _distinct_values(connection, "country"),
+                "platform": _distinct_values(connection, "platform"),
+            }
+            technologies = _distinct_technologies(connection)
+
+        st.sidebar.subheader("Chat filters")
+        st.sidebar.multiselect("Category", distinct["category"], key="chat_f_category")
+        st.sidebar.multiselect("Platform", distinct["platform"], key="chat_f_platform")
+        st.sidebar.multiselect("City", distinct["city"], key="chat_f_city")
+        st.sidebar.multiselect("State", distinct["state"], key="chat_f_state")
+        st.sidebar.multiselect("Country", distinct["country"], key="chat_f_country")
+        st.sidebar.selectbox(
+            "Priority",
+            options=["", "Hot", "Warm", "Cold", "Avoid"],
+            format_func=lambda v: v or "Any",
+            key="chat_f_priority",
+        )
+        st.sidebar.checkbox("Only leads with a website", key="chat_f_website")
+        st.sidebar.multiselect("Has technology (name)", technologies, key="chat_f_tech")
+
+        st.sidebar.subheader("Score ranges")
+        st.sidebar.slider("SEO score", 0, 100, (0, 100), key="chat_f_seo")
+        st.sidebar.slider("Lead score", 0, 100, (0, 100), key="chat_f_lead")
+        st.sidebar.slider("Visual score", 0, 100, (0, 100), key="chat_f_visual")
+        st.sidebar.slider("Opportunity score", 0, 100, (0, 100), key="chat_f_opp")
+
+        st.sidebar.divider()
+        status = service.backend_status()
+        st.sidebar.markdown("**Assistant**")
+        st.sidebar.caption(
+            f"Backend: {status['name']} · mode: {status['mode'].replace('_', ' ')}"
+        )
+        if st.sidebar.button("Clear conversation", key="chat_clear"):
+            session_id = st.session_state.get("chat_session_id")
+            if session_id:
+                service.clear_session(session_id)
+            st.session_state.pop("chat_history", None)
+            st.session_state.pop("chat_session_id", None)
+            st.session_state.pop("chat_restored", None)
+            st.rerun()
+
+
+def _chat_filters() -> dict[str, Any]:
+    filters: dict[str, Any] = {}
+
+    def _multi(key: str, target: str) -> None:
+        selected = st.session_state.get(key) or []
+        if selected:
+            filters[target] = list(selected)
+
+    _multi("chat_f_category", "category")
+    _multi("chat_f_platform", "platform")
+    _multi("chat_f_city", "city")
+    _multi("chat_f_state", "state")
+    _multi("chat_f_country", "country")
+
+    tech = st.session_state.get("chat_f_tech") or []
+    if tech:
+        filters["technologies"] = list(tech)
+
+    priority = st.session_state.get("chat_f_priority")
+    if priority:
+        filters["priority"] = priority
+
+    if st.session_state.get("chat_f_website"):
+        filters["website_present"] = True
+
+    for key, target in (
+        ("chat_f_seo", "seo_score"),
+        ("chat_f_lead", "lead_score"),
+        ("chat_f_visual", "visual_score"),
+        ("chat_f_opp", "opportunity_score"),
+    ):
+        low, high = st.session_state.get(key) or (0, 100)
+        if int(low) > 0 or int(high) < 100:
+            filters[target] = {"min": int(low), "max": int(high)}
+    return filters
 
 
 def _distinct_values(connection: sqlite3.Connection, column: str) -> list[str]:

@@ -20,6 +20,8 @@ Progress (implemented)
 - ✅ Phase 9 (Free Lead Discovery via OpenStreetMap): Steps 9.1–9.6 completed — OSM (Overpass + Nominatim) replaces Google Places as the keyless default provider
 - ✅ Phase 10 (Focused Multi Page Website Crawling): crawler module, focused crawl in the pipeline, disk cache, 43 new tests — homepage + top ranked internal pages merged into one labelled document for the LLM
 - ✅ Phase 11 (Local Visual Website Audit): offline screenshot-based visual audit (bounded captures, deterministic CV-lite heuristics, additive 0–100 scoring, dashboard filters, SQLite persistence); gated by VISUAL config, degrades without API key; 338 tests pass.
+- ✅ Phase 14 (Local Semantic Search Engine): fully offline index + search (`src/search/`), incremental indexing on every run, AI Search dashboard page; 464 tests pass.
+- ✅ Phase 15 (Grounded AI Chat Assistant): `src/chat/` — deterministic intent router, semantic + SQL retrieval, local-LLM RAG (Ollama/OpenAI-compatible, stdlib only) with grounding guard, retrieval-summary fallback, persisted sessions, AI Chat dashboard page; 561 tests pass.
 
 ---
 
@@ -588,3 +590,36 @@ Status
 ---
 - Pricing presets per model (avoid manual env price config)
 - Outreach workflow: sent timestamp + “not contacted” exports
+
+---
+
+PHASE 15 — Grounded AI Chat Assistant (completed)
+
+Step 15.1 — Intent router
+- `src/chat/router.py`: deterministic `route_query` — 8 intents (search/rank/summarize/compare/similar/outreach/explain/detail) from keyword/regex + DB-derived `RouteHints`; extracts top-N, priority bands, score thresholds, weak-SEO/visual signals, no-website, platform, place, business names (multi-name for compare; SEARCH+name escalates to DETAIL).
+Status
+- ✅ Done — `tests/test_chat_router.py`.
+
+Step 15.2 — Retrieval (semantic + SQL fallback)
+- `src/chat/retriever.py`: reuse `SearchService` when the index is non-empty (scalar filters), else deterministic parameterized SQL with list filters (`IN`) and explicit ordering (lead score → top opportunity → contactability → recency); similarity fallback same-category-first; UI filters win over route filters.
+Status
+- ✅ Done — `tests/test_chat_retriever.py`.
+
+Step 15.3 — Answer generation (summary + RAG with grounding)
+- `src/chat/response.py`: retrieval-summary bullets, compare table, lead-detail block, no-data message; `LLMBackend` (Ollama / OpenAI-compatible, stdlib urllib, probe TTL, never raises); RAG answers must reference a retrieved lead/name/digit and never quote unknown names (`src/chat/safety.py`) — otherwise automatic fallback.
+Status
+- ✅ Done — `tests/test_chat_response.py`, `tests/test_chat_safety.py`.
+
+Step 15.4 — Conversation memory + persistence
+- `src/chat/memory.py` + `src/storage/chat.py`: capped in-memory history, optional SQLite mirror (`chat_sessions`/`chat_messages` in `SCHEMA_SQL`); session restore and clear via `ChatService.last_session`/`load_history`/`clear_session`.
+Status
+- ✅ Done — `tests/test_chat_memory.py`.
+
+Step 15.5 — Service facade + dashboard page
+- `src/chat/service.py`: `ask` (never raises), `summarize_lead`, `find_similar`, `compare`, `explain_ranking`, `backend_status`; dashboard “AI Chat” page (radio, chat input, mode badge, sources, chat filters, clear conversation).
+Status
+- ✅ Done — `tests/test_chat_service.py`; dashboard import-checked.
+
+Step 15.6 — Verification
+- Full suite: `python -m unittest discover -s tests` → 561 tests pass (464 pre-existing + 97 new).
+- `python -m compileall -q main.py dashboard.py src` OK; `main.py --input business_urls.sample.csv --limit 3 --no-crawl --log-file none` completes; RAG pass/fallback + persistence verified with a fake backend.

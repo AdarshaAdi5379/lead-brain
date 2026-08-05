@@ -130,6 +130,51 @@ Tunables (env / `src/settings.py`): `SEARCH_ENABLED` (default true),
 `SEARCH_MAX_QUERY_CHARS` (500). Switching the embedder invalidates the cache and
 re-indexes automatically.
 
+## AI Chat (grounded conversation over your leads)
+
+The dashboard's **AI Chat** page answers questions about your leads — "restaurants
+with weak SEO", "which businesses should I pitch first?", "compare the top two" —
+exclusively from data in the local database. It never invents facts:
+
+1. **Route** — lightweight, deterministic rules classify the question (search /
+   rank / summarize / compare / similar / outreach / explain / detail) and pull
+   parameters (top-N, priority bands, score thresholds, platform, place).
+2. **Retrieve** — the same local search engine as AI Search (or a deterministic
+   SQL fallback when the index is empty) pulls the most relevant leads with their
+   scores, audits, opportunities and contact details.
+3. **Answer** — if a local LLM is available the answer is synthesized from a
+   fenced, untrusted-data context block and checked for grounding (any quoted
+   business name must exist in the retrieved set, otherwise it falls back);
+   without an LLM it returns a retrieval summary or comparison table instead.
+
+No paid/cloud APIs: synthesis is optional and local-only.
+
+```bash
+# Question the database from the terminal (Ollama if reachable, else summaries):
+python -c "
+from pathlib import Path
+from src.chat.service import ChatService
+svc = ChatService(Path('data/leads.sqlite'))
+print(svc.ask('restaurants with weak SEO').answer)
+"
+```
+
+Local LLM backends (chat only): **Ollama** (`CHAT_OLLAMA_BASE_URL`, default
+`http://localhost:11434`, model `llama3.2`) or any **OpenAI-compatible** local
+endpoint (`CHAT_OPENAI_COMPATIBLE_BASE_URL`, e.g. LM Studio at
+`http://localhost:1234/v1`). With neither reachable (or `CHAT_LLM_BACKEND=none`),
+the assistant still answers from retrieval summaries — so it works fully offline,
+with no API key.
+
+Chat env tunables (`src/settings.py`): `CHAT_ENABLED` (default true),
+`CHAT_LLM_BACKEND` (`auto|ollama|openai|none`), `CHAT_OLLAMA_BASE_URL`,
+`CHAT_OLLAMA_MODEL`, `CHAT_OPENAI_COMPATIBLE_BASE_URL`,
+`CHAT_OPENAI_COMPATIBLE_MODEL`, `CHAT_OPENAI_COMPATIBLE_API_KEY` (empty = no auth
+header), `CHAT_LLM_TIMEOUT_S` (60), `CHAT_MAX_CONTEXT_LEADS` (8),
+`CHAT_MAX_CONTEXT_CHARS` (24000), `CHAT_MAX_HISTORY` (10),
+`CHAT_PERSIST_SESSIONS` (1 — sessions/messages are stored in SQLite and the last
+conversation is restored on page load), `CHAT_TOP_K` (15).
+
 ## Run pipeline
 
 ```bash

@@ -129,3 +129,34 @@ SEARCH_RANK_WEIGHT_OPPORTUNITY: float = float(os.environ.get("SEARCH_RANK_WEIGHT
 SEARCH_RANK_WEIGHT_RECENCY: float = float(os.environ.get("SEARCH_RANK_WEIGHT_RECENCY", "0.10"))
 # Hard cap on raw user-query length (safety).
 SEARCH_MAX_QUERY_CHARS: int = int(os.environ.get("SEARCH_MAX_QUERY_CHARS", "500"))
+
+# Grounded AI chat assistant over the lead database (Phase 15). Fully local:
+# retrieval always works; synthesis only when a local LLM backend is available.
+# Master switch: when off, the chat page is unavailable.
+CHAT_ENABLED: bool = os.environ.get("CHAT_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+# Synthesis backend: "auto" (probe local Ollama then local OpenAI-compatible
+# server), "ollama", "openai" (OpenAI-compatible /v1/chat/completions), "none"
+# (retrieval summary mode only, no synthesis).
+CHAT_LLM_BACKEND: str = os.environ.get("CHAT_LLM_BACKEND", "auto").strip().lower()
+CHAT_OLLAMA_BASE_URL: str = os.environ.get("CHAT_OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+CHAT_OLLAMA_MODEL: str = os.environ.get("CHAT_OLLAMA_MODEL", "llama3.2")
+# OpenAI-compatible endpoint (covers llama.cpp server, LM Studio, ...). The API
+# key is optional and defaults to empty (no Authorization header).
+CHAT_OPENAI_COMPATIBLE_BASE_URL: str = os.environ.get(
+    "CHAT_OPENAI_COMPATIBLE_BASE_URL", "http://localhost:1234/v1"
+).rstrip("/")
+CHAT_OPENAI_COMPATIBLE_MODEL: str = os.environ.get("CHAT_OPENAI_COMPATIBLE_MODEL", "local-model")
+CHAT_OPENAI_COMPATIBLE_API_KEY: Optional[str] = os.environ.get(
+    "CHAT_OPENAI_COMPATIBLE_API_KEY", ""
+).strip() or None
+# Timeout for a single synthesis call (seconds).
+CHAT_LLM_TIMEOUT_S: int = int(os.environ.get("CHAT_LLM_TIMEOUT_S", "60"))
+# Context budget for retrieval-based answers.
+CHAT_MAX_CONTEXT_LEADS: int = int(os.environ.get("CHAT_MAX_CONTEXT_LEADS", "8"))
+CHAT_MAX_CONTEXT_CHARS: int = int(os.environ.get("CHAT_MAX_CONTEXT_CHARS", "24000"))
+# Conversation history kept per session (most recent turns).
+CHAT_MAX_HISTORY: int = int(os.environ.get("CHAT_MAX_HISTORY", "10"))
+# When on, chat sessions/messages persist in SQLite (chat_sessions/chat_messages).
+CHAT_PERSIST_SESSIONS: bool = os.environ.get("CHAT_PERSIST_SESSIONS", "1").strip().lower() in {"1", "true", "yes", "on"}
+# Default number of leads retrieved per question.
+CHAT_TOP_K: int = int(os.environ.get("CHAT_TOP_K", "15"))

@@ -272,6 +272,26 @@ CREATE TABLE IF NOT EXISTS lead_embeddings (
 
 CREATE INDEX IF NOT EXISTS ix_lead_embeddings_updated_at
   ON lead_embeddings(updated_at);
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  message TEXT NOT NULL,
+  retrieved_lead_ids_json TEXT NOT NULL DEFAULT '[]',
+  intent TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS ix_chat_messages_session
+  ON chat_messages(session_id, created_at);
 """
 
 

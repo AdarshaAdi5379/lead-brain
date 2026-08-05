@@ -122,6 +122,25 @@ Phase 11 — Local Visual Website Audit (completed)
 - Verified offline: `python main.py --input business_urls.sample.csv --limit 3 --no-crawl --log-file none` ran the visual audit (example.com → 98/100 Excellent) and completed end-to-end.
 - Tests: 10 new files (`tests/test_visual_*.py` + `tests/visual_fixtures.py`); full suite 338 tests pass (`python -m unittest discover -s tests`).
 
+Phase 14 — Local semantic search engine (completed)
+- Fully offline index + search: `src/search/` (config, index, embedding, vector_store, query, ranking, summarizer, cache, search_service).
+- `lead_embeddings` table, incremental `index_run`/`index_lead` on every pipeline run (content-hash skipped), `--no-index`, `--rebuild-index`.
+- Deterministic `hash-ngram-512` embedder + SQLite cosine store (no deps); optional sentence-transformers + Chroma.
+- AI Search dashboard page: hybrid/semantic/keyword, whitelisted filters, similar-leads, per-lead AI context.
+- Tests: `tests/test_search_*.py` + `tests/search_fixtures.py`.
+
+Phase 15 — Grounded AI chat assistant over leads (completed)
+- New `src/chat/` package (stdlib only, no paid APIs): base/config/safety/router/retriever/context_builder/prompts/llm/memory/response/service.
+- `route_query` — deterministic local intent router (8 intents) over keyword/regex + DB-derived hints (categories/cities/states/countries/platforms/business names); extracts top-N, priority bands, score thresholds, weak-SEO/visual signals, no-website, platform, place, business names (multi-name for compare).
+- `LeadRetriever` — semantic path reuses `SearchService` (validate_filters whitelist); SQL fallback (`_sql_select_leads`, parameterized, deterministic ORDER BY lead score → top opp → contactability → recency) when the index is empty; SQL accepts list filters via `IN` where the vector engine accepts only scalars; similarity fallback ranks same-category first; filter merge UI-wins.
+- `ResponseGenerator` — retrieval-summary bullets, compare markdown table, rich lead-detail block, no-data message; optional RAG synthesis through `LLMBackend` (Ollama `/api/chat` or OpenAI-compatible `/v1/chat/completions`, stdlib urllib, 30s probe TTL, never raises) with grounding guard: quoted unknown names are rejected, and an answer with no lead/digit reference is rejected → automatic fallback to the deterministic mode.
+- Safety: `<lead_data>` untrusted-data fence, prompt injection defense, `sanitize_text`/`redact`, source panel carries rationale; stored site text is data, never instructions.
+- `ChatService` facade: `ask`/`retrieve_context`/`summarize_lead`/`find_similar`/`compare`/`explain_ranking`/`backend_status`; persisted sessions (`chat_sessions`/`chat_messages` in `SCHEMA_SQL`, additive), session restore via `last_session`/`load_history`, `clear_session`. `ask` never raises — failures degrade to a no-data response.
+- Dashboard AI Chat page (`dashboard.py` radio "AI Chat"): st.chat_input conversation, mode badge, sources expander, chat filters sidebar, backend status, clear conversation; last session restored on load.
+- Env tunables: `CHAT_*` in `src/settings.py` (CHAT_LLM_BACKEND auto/ollama/openai/none, Ollama + OpenAI-compatible URLs/models, timeouts, context budget, history, persistence, top-k).
+- Verified offline (no LLM, no index): summarization, compare table, detail, no-data, no-website, RAG pass/fallback/hallucination with a fake backend, memory persistence round-trip.
+- Tests: 7 new files (`tests/test_chat_*.py` + `tests/chat_fixtures.py`); full suite 561 tests pass.
+
 Remaining nice-to-haves (Phase 10)
 - Discovery UX: choose city/category in the dashboard and run it from the UI.
 - Harder on OSM results — filter out closed/permanently-closed and low-signal businesses before scrape.

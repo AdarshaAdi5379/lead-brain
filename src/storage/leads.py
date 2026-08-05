@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from typing import Optional
@@ -34,6 +35,18 @@ class LeadUpsert:
     address: Optional[str] = None
     opening_hours: Optional[str] = None
     country: Optional[str] = None
+    owner_name: Optional[str] = None
+    postal_code: Optional[str] = None
+    facebook_url: Optional[str] = None
+    instagram_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    twitter_url: Optional[str] = None
+    youtube_url: Optional[str] = None
+    whatsapp_url: Optional[str] = None
+    contact_page_url: Optional[str] = None
+    contact_form_url: Optional[str] = None
+    google_maps_url: Optional[str] = None
+    service_areas: Optional[list[str]] = None
 
 
 UPSERT_SQL = """
@@ -62,7 +75,19 @@ INSERT INTO leads (
   longitude,
   address,
   opening_hours,
-  country
+  country,
+  owner_name,
+  postal_code,
+  facebook_url,
+  instagram_url,
+  linkedin_url,
+  twitter_url,
+  youtube_url,
+  whatsapp_url,
+  contact_page_url,
+  contact_form_url,
+  google_maps_url,
+  service_areas_json
 )
 VALUES (
   :run_id,
@@ -89,7 +114,19 @@ VALUES (
   :longitude,
   :address,
   :opening_hours,
-  :country
+  :country,
+  :owner_name,
+  :postal_code,
+  :facebook_url,
+  :instagram_url,
+  :linkedin_url,
+  :twitter_url,
+  :youtube_url,
+  :whatsapp_url,
+  :contact_page_url,
+  :contact_form_url,
+  :google_maps_url,
+  :service_areas_json
 )
 ON CONFLICT(website_url_normalized) DO UPDATE SET
   run_id = excluded.run_id,
@@ -115,7 +152,19 @@ ON CONFLICT(website_url_normalized) DO UPDATE SET
   longitude = excluded.longitude,
   address = excluded.address,
   opening_hours = excluded.opening_hours,
-  country = excluded.country;
+  country = excluded.country,
+  owner_name = excluded.owner_name,
+  postal_code = excluded.postal_code,
+  facebook_url = excluded.facebook_url,
+  instagram_url = excluded.instagram_url,
+  linkedin_url = excluded.linkedin_url,
+  twitter_url = excluded.twitter_url,
+  youtube_url = excluded.youtube_url,
+  whatsapp_url = excluded.whatsapp_url,
+  contact_page_url = excluded.contact_page_url,
+  contact_form_url = excluded.contact_form_url,
+  google_maps_url = excluded.google_maps_url,
+  service_areas_json = excluded.service_areas_json;
 """
 
 
@@ -207,6 +256,18 @@ def upsert_lead(connection: sqlite3.Connection, lead: LeadUpsert) -> str:
             "address": lead.address,
             "opening_hours": lead.opening_hours,
             "country": lead.country,
+            "owner_name": lead.owner_name,
+            "postal_code": lead.postal_code,
+            "facebook_url": lead.facebook_url,
+            "instagram_url": lead.instagram_url,
+            "linkedin_url": lead.linkedin_url,
+            "twitter_url": lead.twitter_url,
+            "youtube_url": lead.youtube_url,
+            "whatsapp_url": lead.whatsapp_url,
+            "contact_page_url": lead.contact_page_url,
+            "contact_form_url": lead.contact_form_url,
+            "google_maps_url": lead.google_maps_url,
+            "service_areas_json": json.dumps(lead.service_areas or []),
         },
     )
     connection.commit()

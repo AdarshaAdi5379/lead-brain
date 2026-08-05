@@ -176,6 +176,7 @@ def _element_to_candidate(element: dict[str, Any], category: str) -> Optional[Bu
         latitude=lat,
         longitude=lon,
         address=_build_address(tags),
+        postal_code=_first_tag(tags, "addr:postcode"),
         opening_hours=_first_tag(tags, "opening_hours"),
         osm_id=str(element.get("id", "")),
         osm_type=str(element.get("type", "")),

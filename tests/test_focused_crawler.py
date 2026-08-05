@@ -142,6 +142,36 @@ class TestFocusedCrawler(unittest.TestCase):
         second = _crawl(self._crawler(), FakeFetcher(_site()))
         self.assertEqual(first.content_hash, second.content_hash)
 
+    def test_contact_signals_attached_from_raw_html(self) -> None:
+        from tests.contact_fixtures import JSONLD_HOMEPAGE
+
+        site = dict(PAGES, **{HOME: JSONLD_HOMEPAGE})
+        result = _crawl(self._crawler(), FakeFetcher(site))
+        self.assertTrue(result.ok)
+        signals = result.contact_signals
+        self.assertEqual(signals.postal_code, "78701")
+        self.assertEqual(signals.facebook_url, "https://www.facebook.com/acmeplumbing")
+        self.assertEqual(signals.twitter_url, "https://x.com/acmeplumbing")
+        self.assertIsNotNone(signals.contact_page_url)
+        self.assertIn("/contact", signals.contact_page_url)
+        self.assertTrue(all(p.contact is not None for p in result.pages))
+
+    def test_contact_signals_survive_cache_reuse(self) -> None:
+        from tests.contact_fixtures import JSONLD_HOMEPAGE
+
+        site = dict(PAGES, **{HOME: JSONLD_HOMEPAGE})
+        crawler = self._crawler()
+        first = _crawl(crawler, FakeFetcher(site))
+        self.assertIsNotNone(first.contact_signals.facebook_url)
+
+        # Second run: only the homepage is fetched; ranked pages come from cache.
+        fetcher2 = FakeFetcher({HOME: JSONLD_HOMEPAGE})
+        second = _crawl(crawler, fetcher2)
+        self.assertGreater(second.metadata.cached_pages, 0)
+        self.assertEqual(len(fetcher2.calls), 1)
+        self.assertTrue(all(p.contact is not None for p in second.pages))
+        self.assertEqual(second.contact_signals.facebook_url, first.contact_signals.facebook_url)
+
 
 if __name__ == "__main__":
     unittest.main()

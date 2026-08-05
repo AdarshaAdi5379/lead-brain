@@ -161,6 +161,7 @@ def candidate_to_seed(candidate: BusinessCandidate, query: DiscoveryQuery) -> Se
         latitude=candidate.latitude,
         longitude=candidate.longitude,
         address=candidate.address,
+        postal_code=candidate.postal_code,
         opening_hours=candidate.opening_hours,
         source=candidate.source,
     )

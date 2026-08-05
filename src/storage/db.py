@@ -57,6 +57,19 @@ CREATE TABLE IF NOT EXISTS leads (
   opening_hours TEXT,
   country TEXT,
 
+  owner_name TEXT,
+  postal_code TEXT,
+  facebook_url TEXT,
+  instagram_url TEXT,
+  linkedin_url TEXT,
+  twitter_url TEXT,
+  youtube_url TEXT,
+  whatsapp_url TEXT,
+  contact_page_url TEXT,
+  contact_form_url TEXT,
+  google_maps_url TEXT,
+  service_areas_json TEXT,
+
   FOREIGN KEY (run_id) REFERENCES scraping_runs(run_id) ON DELETE SET NULL
 );
 
@@ -330,6 +343,18 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         ("address", "TEXT"),
         ("opening_hours", "TEXT"),
         ("country", "TEXT"),
+        ("owner_name", "TEXT"),
+        ("postal_code", "TEXT"),
+        ("facebook_url", "TEXT"),
+        ("instagram_url", "TEXT"),
+        ("linkedin_url", "TEXT"),
+        ("twitter_url", "TEXT"),
+        ("youtube_url", "TEXT"),
+        ("whatsapp_url", "TEXT"),
+        ("contact_page_url", "TEXT"),
+        ("contact_form_url", "TEXT"),
+        ("google_maps_url", "TEXT"),
+        ("service_areas_json", "TEXT"),
     ]
     for column, column_type in _ADDITIVE_LEAD_COLUMNS:
         if column not in lead_columns:

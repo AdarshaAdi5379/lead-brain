@@ -20,6 +20,7 @@ from src.settings import (
     MAX_PAGE_CHARACTERS,
     SEO_PAGE_HTML_MAX_CHARS,
 )
+from src.contact import ContactSignals, extract_contact_signals, merge_contact_signals
 
 logger = logging.getLogger("lead.crawl")
 
@@ -46,6 +47,9 @@ class PageRecord:
     # Bounded raw HTML fragment kept for the deterministic local SEO audit.
     # Empty for legacy cache entries that never stored HTML.
     html: str = ""
+    # Structured contact facts extracted from the raw HTML (empty set when
+    # the page carried none or the HTML is unavailable).
+    contact: ContactSignals = ContactSignals()
 
 
 @dataclass(frozen=True)
@@ -58,6 +62,7 @@ class CrawlResult:
     pages: tuple[PageRecord, ...]
     content_hash: str
     metadata: Optional[CrawlMetadata]
+    contact_signals: ContactSignals = ContactSignals()
 
     def __bool__(self) -> bool:
         return self.ok
@@ -73,6 +78,7 @@ def _empty_crawl(url: str, error: str) -> CrawlResult:
         pages=(),
         content_hash="",
         metadata=None,
+        contact_signals=ContactSignals(),
     )
 
 
@@ -123,6 +129,11 @@ class FocusedCrawler:
         logger.info("Ranked links")
         logger.info("Selected: %s", ", ".join(label_for_link(l) for l in selected) or "(none)")
 
+        # Contact intelligence runs on the raw HTML *before* boilerplate
+        # removal: headers/footers, forms and social icons are where contact
+        # facts live, and the visible-text extractor deliberately strips them.
+        home_contact = extract_contact_signals(home_html, final_home_url, page_label="HOME")
+
         home_content = parse_page(home_html, final_home_url)
 
         sections: list[Section] = []
@@ -143,10 +154,12 @@ class FocusedCrawler:
                     title=home_content.title,
                     text=home_text,
                     html=self._bounded_html(home_html),
+                    contact=home_contact,
                 )
             )
 
         for link in selected:
+            label = label_for_link(link)
             cached_text = self._cache.get(link.url)
             if cached_text is not None:
                 cached_pages += 1
@@ -154,6 +167,11 @@ class FocusedCrawler:
                 page_title = ""
                 page_url = link.url
                 page_html = self._cache.get_html(link.url)
+                page_contact = (
+                    extract_contact_signals(page_html, page_url, page_label=label)
+                    if page_html
+                    else ContactSignals()
+                )
                 # Rebuild contact clues from cached plain text (emails only).
                 clues.extend(extract_contact_clues(cached_text, link.url))
             else:
@@ -164,6 +182,9 @@ class FocusedCrawler:
                     continue
                 visited += 1
                 page_url = page_fetch.final_url or link.url
+                page_contact = extract_contact_signals(
+                    page_fetch.html or "", page_url, page_label=label
+                )
                 page_content = parse_page(page_fetch.html or "", page_url)
                 page_text = page_content.text
                 page_title = page_content.title
@@ -176,7 +197,6 @@ class FocusedCrawler:
                 continue
 
             trimmed = trim_text(page_text, max_chars=self._max_page_characters)
-            label = label_for_link(link)
             sections.append(Section(label=label, url=page_url, text=trimmed))
             records.append(
                 PageRecord(
@@ -185,6 +205,7 @@ class FocusedCrawler:
                     title=page_title,
                     text=trimmed,
                     html=page_html,
+                    contact=page_contact,
                 )
             )
 
@@ -217,6 +238,7 @@ class FocusedCrawler:
             pages=tuple(records),
             content_hash=metadata.content_hash,
             metadata=metadata,
+            contact_signals=merge_contact_signals(record.contact for record in records),
         )
 
     # --- helpers ---------------------------------------------------------

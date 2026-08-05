@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -76,6 +77,21 @@ class LeadRow:
     outreach_sent: bool
     outreach_sent_at: Optional[str]
     notes: Optional[str]
+    owner_name: Optional[str] = None
+    address: Optional[str] = None
+    country: Optional[str] = None
+    opening_hours: Optional[str] = None
+    postal_code: Optional[str] = None
+    facebook_url: Optional[str] = None
+    instagram_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    twitter_url: Optional[str] = None
+    youtube_url: Optional[str] = None
+    whatsapp_url: Optional[str] = None
+    contact_page_url: Optional[str] = None
+    contact_form_url: Optional[str] = None
+    google_maps_url: Optional[str] = None
+    service_areas: list[str] = field(default_factory=list)
 
 
 def main() -> None:
@@ -478,6 +494,8 @@ def main() -> None:
         draft = _outreach_email(selected)
         st.text_area("Outreach email draft", value=draft, height=320)
 
+        _render_contact_section(selected)
+
         detections = tech_by_lead.get(selected.id, [])
         if detections:
             st.markdown("### Detected technologies")
@@ -540,7 +558,11 @@ def _fetch_leads(connection: sqlite3.Connection) -> list[LeadRow]:
           city, state, category,
           score, priority, extraction_success,
           extracted_at, last_error,
-          outreach_sent, outreach_sent_at, notes
+          outreach_sent, outreach_sent_at, notes,
+          owner_name, address, country, opening_hours, postal_code,
+          facebook_url, instagram_url, linkedin_url, twitter_url, youtube_url,
+          whatsapp_url, contact_page_url, contact_form_url, google_maps_url,
+          service_areas_json
         FROM leads
         ORDER BY extracted_at DESC
         """
@@ -569,9 +591,76 @@ def _fetch_leads(connection: sqlite3.Connection) -> list[LeadRow]:
                 outreach_sent=bool(row["outreach_sent"]),
                 outreach_sent_at=row["outreach_sent_at"],
                 notes=row["notes"],
+                owner_name=row["owner_name"],
+                address=row["address"],
+                country=row["country"],
+                opening_hours=row["opening_hours"],
+                postal_code=row["postal_code"],
+                facebook_url=row["facebook_url"],
+                instagram_url=row["instagram_url"],
+                linkedin_url=row["linkedin_url"],
+                twitter_url=row["twitter_url"],
+                youtube_url=row["youtube_url"],
+                whatsapp_url=row["whatsapp_url"],
+                contact_page_url=row["contact_page_url"],
+                contact_form_url=row["contact_form_url"],
+                google_maps_url=row["google_maps_url"],
+                service_areas=_decode_service_areas(row["service_areas_json"]),
             )
         )
     return leads
+
+
+def _decode_service_areas(raw_json: object) -> list[str]:
+    """Decode the JSON-encoded service areas column into a plain list."""
+    if not raw_json:
+        return []
+    try:
+        values = json.loads(str(raw_json))
+    except ValueError:
+        return []
+    if not isinstance(values, list):
+        return []
+    return [str(value) for value in values if value]
+
+
+def _render_contact_section(lead: LeadRow) -> None:
+    """Read-only 'Contact & Social' block inside the lead details panel."""
+    st.markdown("### Contact & Social (deterministic)")
+    fields = [
+        ("Owner", lead.owner_name),
+        ("Address", lead.address),
+        ("Country", lead.country),
+        ("Opening hours", lead.opening_hours),
+        ("Postal code", lead.postal_code),
+        ("Phone", lead.phone),
+        ("Email", lead.email),
+        ("Website", lead.website_url),
+    ]
+    for label, value in fields:
+        if value:
+            st.markdown(f"- **{label}:** {value}")
+
+    socials = [
+        ("Facebook", lead.facebook_url),
+        ("Instagram", lead.instagram_url),
+        ("LinkedIn", lead.linkedin_url),
+        ("Twitter/X", lead.twitter_url),
+        ("YouTube", lead.youtube_url),
+        ("WhatsApp", lead.whatsapp_url),
+        ("Google Maps", lead.google_maps_url),
+        ("Contact page", lead.contact_page_url),
+        ("Contact form", lead.contact_form_url),
+    ]
+    for label, url in socials:
+        if url:
+            st.markdown(f"- **{label}:** [{url}]({url})")
+
+    if lead.service_areas:
+        st.markdown(f"- **Service areas:** {', '.join(lead.service_areas)}")
+
+    if not any(v for _, v in fields if v) and not any(v for _, v in socials if v):
+        st.caption("No structured contact facts stored for this lead.")
 
 
 def _label_for_id(rows: list[LeadRow], lead_id: int) -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import json
 import logging
 import sys
 from datetime import datetime
@@ -16,6 +17,9 @@ except Exception:  # pragma: no cover
     load_dotenv = None  # type: ignore
 
 from src.costing import estimate_cost, pricing_config
+from src.contact import ContactSignals, extract_contact_signals_from_crawl
+from src.contact.extractor import extract_contact_signals_from_fetch
+from src.contact.helpers import google_maps_url as build_google_maps_url
 from src.discovery.discovery import (
     DiscoveryQuery,
     discover_to_seeds,
@@ -125,6 +129,18 @@ EXPORT_COLUMNS = [
     "pages_with_weak_cta_signal",
     "pages_with_strong_brand_signal",
     "pages_with_weak_hierarchy_signal",
+    "owner_name",
+    "postal_code",
+    "facebook_url",
+    "instagram_url",
+    "linkedin_url",
+    "twitter_url",
+    "youtube_url",
+    "whatsapp_url",
+    "contact_page_url",
+    "contact_form_url",
+    "google_maps_url",
+    "service_areas",
 ]
 
 
@@ -603,11 +619,13 @@ def _run_seeds(
                 except Exception as exc:
                     logger.debug("Opportunity detection failed for %s: %s", seed.url, exc)
 
+                contact = _build_contact_fields(seed, fetch, crawl, extracted)
+
                 lead = LeadUpsert(
                     website_url=seed.url,
                     business_name=extracted.get("business_name") or seed.business_name or None,
-                    phone=extracted.get("phone") or seed.phone,
-                    email=extracted.get("email") or seed.email,
+                    phone=extracted.get("phone") or seed.phone or contact["phone"],
+                    email=extracted.get("email") or seed.email or contact["email"],
                     platform=extracted.get("platform"),
                     complexity=extracted.get("complexity"),
                     load_speed=extracted.get("load_speed"),
@@ -624,9 +642,21 @@ def _run_seeds(
                     osm_type=seed.osm_type,
                     latitude=seed.latitude,
                     longitude=seed.longitude,
-                    address=seed.address,
-                    opening_hours=seed.opening_hours,
-                    country=seed.country,
+                    address=contact["address"],
+                    opening_hours=contact["opening_hours"],
+                    country=contact["country"],
+                    owner_name=contact["owner_name"],
+                    postal_code=contact["postal_code"],
+                    facebook_url=contact["facebook_url"],
+                    instagram_url=contact["instagram_url"],
+                    linkedin_url=contact["linkedin_url"],
+                    twitter_url=contact["twitter_url"],
+                    youtube_url=contact["youtube_url"],
+                    whatsapp_url=contact["whatsapp_url"],
+                    contact_page_url=contact["contact_page_url"],
+                    contact_form_url=contact["contact_form_url"],
+                    google_maps_url=contact["google_maps_url"],
+                    service_areas=contact["service_areas"],
                 )
 
                 try:
@@ -817,6 +847,8 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
         )
     )
 
+    contact = _build_contact_fields(seed, fetch=None, crawl=None, extracted=extracted)
+
     lead = LeadUpsert(
         website_url=None,
         business_name=seed.business_name or None,
@@ -838,9 +870,21 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
         osm_type=seed.osm_type,
         latitude=seed.latitude,
         longitude=seed.longitude,
-        address=seed.address,
-        opening_hours=seed.opening_hours,
-        country=seed.country,
+        address=contact["address"],
+        opening_hours=contact["opening_hours"],
+        country=contact["country"],
+        owner_name=contact["owner_name"],
+        postal_code=contact["postal_code"],
+        facebook_url=contact["facebook_url"],
+        instagram_url=contact["instagram_url"],
+        linkedin_url=contact["linkedin_url"],
+        twitter_url=contact["twitter_url"],
+        youtube_url=contact["youtube_url"],
+        whatsapp_url=contact["whatsapp_url"],
+        contact_page_url=contact["contact_page_url"],
+        contact_form_url=contact["contact_form_url"],
+        google_maps_url=contact["google_maps_url"],
+        service_areas=contact["service_areas"],
     )
 
     try:
@@ -862,10 +906,57 @@ def _crawl_summary(crawl: Optional[CrawlResult]) -> Optional[dict]:
         "error": crawl.error,
         "merged_text": crawl.merged_text,
         "contact_clues": list(crawl.contact_clues),
+        "social_urls": list(crawl.contact_signals.social_urls),
         "pages": [
             {"url": page.url, "label": page.label, "title": page.title, "text": page.text}
             for page in crawl.pages
         ],
+    }
+
+
+def _build_contact_fields(
+    seed: SeedRow,
+    fetch,
+    crawl: Optional[CrawlResult],
+    extracted: dict,
+) -> dict:
+    """Merge contact intelligence signals into the lead row fields.
+
+    Priority: crawl signals > homepage-only signals > discovery fields. A
+    valid existing value is never overwritten by an empty one; the Google
+    Maps URL is derived locally from seed coordinates (no API calls).
+    Best-effort: any failure degrades to the discovery fields only.
+    """
+    signals = ContactSignals()
+    try:
+        if crawl is not None and crawl.ok:
+            signals = extract_contact_signals_from_crawl(crawl)
+        elif fetch is not None:
+            signals = extract_contact_signals_from_fetch(fetch)
+    except Exception as exc:
+        logging.getLogger("lead").debug(
+            "Contact extraction failed for %s: %s", seed.url, exc
+        )
+
+    return {
+        "phone": signals.phone or None,
+        "email": signals.email or None,
+        "address": signals.address or seed.address or None,
+        "country": signals.country or seed.country or None,
+        "opening_hours": signals.opening_hours or seed.opening_hours or None,
+        "postal_code": signals.postal_code or seed.postal_code or None,
+        "owner_name": signals.owner_name,
+        "facebook_url": signals.facebook_url,
+        "instagram_url": signals.instagram_url,
+        "linkedin_url": signals.linkedin_url,
+        "twitter_url": signals.twitter_url,
+        "youtube_url": signals.youtube_url,
+        "whatsapp_url": signals.whatsapp_url,
+        "contact_page_url": signals.contact_page_url,
+        "contact_form_url": signals.contact_form_url,
+        "google_maps_url": signals.google_maps_url
+        or build_google_maps_url(seed.latitude, seed.longitude),
+        "service_areas": signals.service_areas or None,
     }
 
 
@@ -1021,7 +1112,11 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
           platform, complexity, load_speed,
           city, state, category,
           score, priority,
-          extraction_success, last_error
+          extraction_success, last_error,
+          address, country, opening_hours, postal_code, owner_name,
+          facebook_url, instagram_url, linkedin_url, twitter_url, youtube_url,
+          whatsapp_url, contact_page_url, contact_form_url, google_maps_url,
+          service_areas_json
         FROM leads
         WHERE run_id = ? AND (score IS NOT NULL AND score >= ?)
         ORDER BY score DESC, extracted_at DESC
@@ -1076,6 +1171,12 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
         writer.writeheader()
         for row in rows:
             record = dict(row)
+            # Decode the JSON-encoded service areas into a flat list column.
+            try:
+                areas = json.loads(record.get("service_areas_json") or "[]")
+                record["service_areas"] = "; ".join(str(area) for area in areas)
+            except ValueError:
+                record["service_areas"] = record.get("service_areas_json") or ""
             # Add recommendation at export-time (not stored in DB).
             score = score_lead(
                 {

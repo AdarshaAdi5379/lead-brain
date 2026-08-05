@@ -28,6 +28,7 @@ class BusinessCandidate:
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     address: Optional[str] = None
+    postal_code: Optional[str] = None
     opening_hours: Optional[str] = None
     osm_id: Optional[str] = None
     osm_type: Optional[str] = None

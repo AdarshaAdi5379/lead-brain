@@ -23,6 +23,7 @@ class SeedRow:
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     address: Optional[str] = None
+    postal_code: Optional[str] = None
     opening_hours: Optional[str] = None
     source: Optional[str] = None
 
@@ -41,6 +42,7 @@ _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "latitude": ("latitude", "lat"),
     "longitude": ("longitude", "lon", "lng"),
     "address": ("address", "addr"),
+    "postal_code": ("postal_code", "postcode", "zip", "zip_code"),
     "opening_hours": ("opening_hours", "hours"),
     "source": ("source", "origin"),
 }
@@ -119,6 +121,7 @@ def load_seed_csv(csv_path: Path) -> list[SeedRow]:
                     latitude=_float_optional(row, _COLUMN_ALIASES["latitude"]),
                     longitude=_float_optional(row, _COLUMN_ALIASES["longitude"]),
                     address=_clean_optional(row, _COLUMN_ALIASES["address"]),
+                    postal_code=_clean_optional(row, _COLUMN_ALIASES["postal_code"]),
                     opening_hours=_clean_optional(row, _COLUMN_ALIASES["opening_hours"]),
                     source=_clean_optional(row, _COLUMN_ALIASES["source"]),
                 )

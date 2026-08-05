@@ -1,5 +1,5 @@
 Session Notes — lead-brain
-Last updated: 2026-08-02 (Asia/Kolkata)
+Last updated: 2026-08-05 (Asia/Kolkata)
 
 Repo
 - GitHub: `AdarshaAdi5379/lead-brain`
@@ -140,6 +140,25 @@ Phase 15 — Grounded AI chat assistant over leads (completed)
 - Env tunables: `CHAT_*` in `src/settings.py` (CHAT_LLM_BACKEND auto/ollama/openai/none, Ollama + OpenAI-compatible URLs/models, timeouts, context budget, history, persistence, top-k).
 - Verified offline (no LLM, no index): summarization, compare table, detail, no-data, no-website, RAG pass/fallback/hallucination with a fake backend, memory persistence round-trip.
 - Tests: 7 new files (`tests/test_chat_*.py` + `tests/chat_fixtures.py`); full suite 561 tests pass.
+
+Phase 12 — Contact intelligence extraction engine (completed)
+- Deterministic contact extraction: `src/contact/` (extractor, forms, helpers, jsonld, schema, social) runs inside the crawler on **raw HTML before boilerplate removal** (home + fetched + cached pages) so header/footer/form markup survives.
+- Extracts: owner name, address, postal code, opening hours, social URLs, contact page/form URLs, maps link, service areas (the area served). JSON-LD (`@type` LocalBusiness/…), `mailto:`/`tel:`/bare email + phone regex, address/social/forms heuristics; merged via `ContactSignals`/`merge_contact_signals`.
+- Persistence: additive migration adds contact columns to `leads` (incl. `service_areas` JSON, `social_urls` JSON) — no DB reset needed; upsert merges new facts over existing ones; seed CSV rows contribute `service_areas`/contact fields for no-website leads.
+- Wired into `main.py` per-seed flow and `focused_crawler.py` (`run_contact_extraction` on merged cached/pages HTML); no-website/failed seeds yield no-op signals, never errors.
+- Tests: `tests/contact_fixtures.py`, `tests/test_contact_extractor.py`, `tests/test_db_migrations.py` (new columns), `tests/test_focused_crawler.py`, `tests/test_upsert_dedupe.py`; full suite 592 tests pass. Commit `8f77c6d`.
+
+Phase 13 — Contact intelligence across the platform (completed)
+- `src/contact/display.py`: pure `CONTACT_FIELDS` (17 fields incl. `service_areas`), `lead_contact_dict`, `group_contact_facts` → (group, label, value) rows for dashboard rendering (groups: Business / Contact / Location / Website & Forms / Social links / Opening hours / Service areas); `src/contact/helpers.py::service_areas_from` normalizes list/raw-JSON/None.
+- Search (`src/search/index.py`): `_document_text` sections LOCATION → SERVICES → CONTACT → SOCIAL → OPENING HOURS with `no phone`/`no email` markers; `METADATA_KEYS` (filters) untouched. Summarizer (`src/search/summarizer.py`): business block gains owner/postal code/opening hours/maps/service areas + new top-level `social` dict (`_social_summary`); `context_to_text` renders them.
+- Chat (`src/chat/context_builder.py`): `build_lead_block` Contact line gains `owner=`/`postal code=`, plus Address, Social (sanitized), Opening hours, Contact page, Contact form, Maps, Service areas lines — NULLs omitted, under `MAX_BLOCK_CHARS`.
+- Opportunities: `OpportunityReport.contact` (input-derived context, never affects scores) — website/phone/email/address/socials + primary contact & best contact method only when a channel exists; `to_llm_text` renders it as a neutral banner; empty for no-website leads (`src/opportunities/aggregator.py`, `base.py`, `report.py`).
+- Outreach (`src/outreach/`): deterministic `build_outreach_context` digest (business, location, services, contact, social presence, opening hours, technology, SEO, visual, opportunity summary, reachability) + markdown `outreach_context_text` + `outreach_context_for_lead` loader; never writes email copy.
+- Storage: `src/storage/search.py::leads_intelligence` decodes `service_areas_json` → `lead["service_areas"]` (safe `_decode_json`); `leads_intelligence` is the shared contract for all consumers.
+- Dashboard (`dashboard.py`): lead detail renders contact via `group_contact_facts` in grouped `####` subsections with link-markdown; opportunity section shows a contact caption (email/phone/website/socials); `_as_dict` includes all 17 contact fields.
+- CSV export (`main.py::_export_csv_for_run`): all contact columns exported, `service_areas` joined with `"; "`.
+- Verified: full suite 622 tests pass (592 pre-existing + 30 new); `compileall` OK; offline smoke `Run 17` → `exports/leads_20260805_130022.csv` with all 12 contact columns; `import dashboard` OK. Commit `941b318` (pushed).
+- AGENTS.md rewritten this session (verified command set, architecture, DB + repo conventions; contact engine now listed among the pure engines).
 
 Remaining nice-to-haves (Phase 10)
 - Discovery UX: choose city/category in the dashboard and run it from the UI.

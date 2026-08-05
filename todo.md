@@ -20,6 +20,8 @@ Progress (implemented)
 - ✅ Phase 9 (Free Lead Discovery via OpenStreetMap): Steps 9.1–9.6 completed — OSM (Overpass + Nominatim) replaces Google Places as the keyless default provider
 - ✅ Phase 10 (Focused Multi Page Website Crawling): crawler module, focused crawl in the pipeline, disk cache, 43 new tests — homepage + top ranked internal pages merged into one labelled document for the LLM
 - ✅ Phase 11 (Local Visual Website Audit): offline screenshot-based visual audit (bounded captures, deterministic CV-lite heuristics, additive 0–100 scoring, dashboard filters, SQLite persistence); gated by VISUAL config, degrades without API key; 338 tests pass.
+- ✅ Phase 12 (Contact Intelligence Engine): deterministic contact extraction (`src/contact/`) on raw HTML before boilerplate removal — owner, address, postal code, opening hours, socials, contact page/form, maps, service areas; stored as lead columns (`service_areas` JSON, additive migration); 592 tests pass.
+- ✅ Phase 13 (Contact Intelligence Platform Integration): contact facts everywhere — chat context blocks, search documents (LOCATION/SERVICES/CONTACT/SOCIAL/OPENING HOURS), business summaries + `social` dict, neutral opportunity LLM banner, outreach context digest (`src/outreach/`), dashboard grouped contact detail, CSV exports; `service_areas_json` decoded by `leads_intelligence`; 622 tests pass.
 - ✅ Phase 14 (Local Semantic Search Engine): fully offline index + search (`src/search/`), incremental indexing on every run, AI Search dashboard page; 464 tests pass.
 - ✅ Phase 15 (Grounded AI Chat Assistant): `src/chat/` — deterministic intent router, semantic + SQL retrieval, local-LLM RAG (Ollama/OpenAI-compatible, stdlib only) with grounding guard, retrieval-summary fallback, persisted sessions, AI Chat dashboard page; 561 tests pass.
 
@@ -588,8 +590,57 @@ Status
 - Verified: `python main.py --input business_urls.sample.csv --limit 3 --no-crawl --log-file none` completes end-to-end with the visual audit stage.
 
 ---
-- Pricing presets per model (avoid manual env price config)
-- Outreach workflow: sent timestamp + “not contacted” exports
+
+PHASE 12 — Contact Intelligence Engine (completed)
+
+Goal
+- Deterministically extract business contact facts (owner, address, postal code, opening hours, social URLs, contact page/form URLs, maps link, service areas) from site HTML — no LLM involved, free and offline.
+
+Step 12.1 — Extraction
+- `src/contact/` (extractor, forms, helpers, jsonld, schema, social): runs inside the crawler on raw HTML **before boilerplate removal** (home + fetched + cached pages) so header/footer/form markup survives; JSON-LD (`@type` LocalBusiness/…), `mailto:`/`tel:`/bare-email/phone regex, address/social/forms heuristics; merged via `ContactSignals`/`merge_contact_signals`.
+Status
+- ✅ Done — `tests/contact_fixtures.py`, `tests/test_contact_extractor.py` (239 lines).
+
+Step 12.2 — Persistence + pipeline wiring
+- Additive migration adds contact columns to `leads` (incl. `service_areas` JSON, `social_urls` JSON) — no DB reset; upsert merges new facts over existing ones; seed CSV rows contribute `service_areas`/contact fields for no-website leads.
+Status
+- ✅ Done — `src/storage/db.py`, `src/storage/leads.py`, `src/url_loader.py`, `tests/test_db_migrations.py`, `tests/test_upsert_dedupe.py`; wired into `main.py` + `focused_crawler.py`.
+- Full suite 592 tests pass. Commit `8f77c6d`.
+
+---
+
+PHASE 13 — Contact Intelligence Platform Integration (completed)
+
+Goal
+- Feed the extracted contact facts into every platform surface: search, chat, summaries, opportunities, dashboard, CSV exports.
+
+Step 13.1 — Display + shared helpers
+- `src/contact/display.py`: `CONTACT_FIELDS` (17 fields incl. `service_areas`), `lead_contact_dict`, `group_contact_facts` → (group, label, value) rows (Business / Contact / Location / Website & Forms / Social links / Opening hours / Service areas); `helpers.service_areas_from` normalizes list/raw-JSON/None.
+Status
+- ✅ Done — `tests/test_contact_display.py`.
+
+Step 13.2 — Search + chat + summaries
+- `_document_text` sections LOCATION → SERVICES → CONTACT → SOCIAL → OPENING HOURS with `no phone`/`no email` markers (`METADATA_KEYS` untouched); summarizer business block + new `social` dict; chat `build_lead_block` Contact line + Address/Social/Opening hours/Contact page/Contact form/Maps/Service areas lines (NULLs omitted).
+Status
+- ✅ Done — `tests/test_search_index.py`, `tests/test_search_summarizer.py`, `tests/test_chat_context_builder.py`.
+
+Step 13.3 — Opportunities + outreach
+- `OpportunityReport.contact` (input-derived, never affects scores): website/phone/email/address/socials + primary contact & best contact method only when a channel exists; neutral banner in `to_llm_text`; empty for no-website leads. New `src/outreach/`: deterministic `build_outreach_context` digest + markdown render + per-lead loader (never writes email copy).
+Status
+- ✅ Done — `tests/test_opportunity_aggregator.py`, `tests/test_opportunity_report.py`, `tests/test_outreach_context.py`.
+
+Step 13.4 — Storage decode + dashboard + export
+- `leads_intelligence` decodes `service_areas_json` → `lead["service_areas"]` (shared contract for all consumers); dashboard lead detail renders grouped contact subsections + opportunity contact caption; CSV export includes all contact columns (`service_areas` joined `"; "`).
+Status
+- ✅ Done — `tests/test_search_storage.py`, `tests/test_pipeline_export.py`.
+- Full suite 622 tests pass; offline smoke `Run 17` → `exports/leads_20260805_130022.csv`; commit `941b318` (pushed).
+
+---
+
+Remaining nice-to-haves
+- Outreach workflow: sent timestamp + "not contacted" exports (context digest already built in Phase 13).
+- Discovery UX: choose city/category in the dashboard and run it from the UI.
+- Harder on OSM results — filter out closed/permanently-closed and low-signal businesses before scrape.
 
 ---
 

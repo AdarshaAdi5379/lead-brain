@@ -1,6 +1,6 @@
 # Second Brain Lead Finder (v1)
 
-Manual CSV → scrape (Playwright) → visual audit → LLM extract → score → SQLite → CSV exports → Streamlit dashboard.
+Manual CSV (or OSM discovery) → crawl (Playwright) → contact + SEO + visual audits → LLM extract → score → opportunities → SQLite → CSV exports → semantic search index → Streamlit dashboard (plus a grounded AI chat).
 
 ## Setup
 
@@ -83,6 +83,32 @@ Inspect screenshots in the Lead detail view, or filter leads by **Visual health*
 **min visual score**, and per-signal flags (weak mobile, clutter, weak CTA, strong
 branding) in the dashboard sidebar.
 
+## Contact intelligence
+
+A deterministic, offline engine (`src/contact/`) extracts business contact facts
+from the **raw HTML** of the homepage, crawled pages, and cached pages — it runs
+*before* boilerplate removal so header/footer/form markup survives:
+
+- Owner name, street address, **postal code**, opening hours
+- Social URLs (Facebook, Instagram, X/Twitter, LinkedIn, YouTube), contact
+  page/form URLs, Google Maps link
+- Service areas (the area(s) a business serves)
+
+Facts are stored as lead columns (`service_areas` as JSON) and flow through the
+whole platform: per-lead chat context blocks, search documents (LOCATION /
+SERVICES / CONTACT / SOCIAL / OPENING HOURS sections with `no phone`/`no email`
+markers), business summaries (incl. a `social` block), a neutral contact banner
+on the LLM opportunity context, the dashboard's grouped Contact detail section,
+and the CSV export (`service_areas` joined with `"; "`).
+
+Contact facts are deterministic-only — the only contact data shown to the LLM is
+a neutral list of social URLs.
+
+An **outreach context** digest (`src/outreach/`) assembles the full per-lead
+picture (business, location, services, contact, social presence, technology,
+SEO, visual, opportunity summary, reachability) in one markdown-shaped dict,
+ready for a future outreach generator — it never writes email copy.
+
 ## Local semantic search (AI Search)
 
 After each run, the pipeline **incrementally indexes** every lead's collected
@@ -108,8 +134,8 @@ Three search modes (`hybrid` default / `semantic` / `keyword`), combined with
 whitelisted filters (category, city, state, country, platform, priority,
 technologies, website present, SEO/lead/visual/opportunity score ranges), a
 "Find similar businesses" (top-10, excludes self), and a neutral per-lead **AI
-context** block for a future chat/outreach assistant. Use it from the
-dashboard's **AI Search** page.
+context** block — the shared intelligence used by the AI chat and outreach
+digests. Use it from the dashboard's **AI Search** page.
 
 Default engine: deterministic `hash-ngram-512` embedder + SQLite brute-force
 cosine store (numpy-accelerated) — no dependencies. Optional upgrade to

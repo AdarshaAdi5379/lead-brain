@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.contact.display import CONTACT_FIELDS, group_contact_facts
 from src.settings import DB_PATH
@@ -63,6 +64,12 @@ except Exception:  # pragma: no cover
     OutreachService = None  # type: ignore
 
 
+try:  # Optional (interactive OpenStreetMap map, Phase 17)
+    from src.map.map_service import MapService
+except Exception:  # pragma: no cover
+    MapService = None  # type: ignore
+
+
 @dataclass(frozen=True)
 class LeadRow:
     id: int
@@ -99,6 +106,8 @@ class LeadRow:
     contact_form_url: Optional[str] = None
     google_maps_url: Optional[str] = None
     service_areas: list[str] = field(default_factory=list)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 def main() -> None:
@@ -116,7 +125,12 @@ def main() -> None:
         st.info("Database not initialized. Run a discovery search above to create it.")
         return
 
-    page = st.sidebar.radio("Page", ["Leads", "AI Search", "AI Chat"], key="page_select")
+    page = st.sidebar.radio(
+        "Page", ["Leads", "Map", "AI Search", "AI Chat"], key="page_select"
+    )
+    if page == "Map":
+        _render_map_page(db_path)
+        return
     if page == "AI Search":
         _render_search_page(db_path)
         return
@@ -568,7 +582,7 @@ def _fetch_leads(connection: sqlite3.Connection) -> list[LeadRow]:
           owner_name, address, country, opening_hours, postal_code,
           facebook_url, instagram_url, linkedin_url, twitter_url, youtube_url,
           whatsapp_url, contact_page_url, contact_form_url, google_maps_url,
-          service_areas_json
+          service_areas_json, latitude, longitude
         FROM leads
         ORDER BY extracted_at DESC
         """
@@ -612,6 +626,8 @@ def _fetch_leads(connection: sqlite3.Connection) -> list[LeadRow]:
                 contact_form_url=row["contact_form_url"],
                 google_maps_url=row["google_maps_url"],
                 service_areas=_decode_service_areas(row["service_areas_json"]),
+                latitude=row["latitude"],
+                longitude=row["longitude"],
             )
         )
     return leads
@@ -1203,6 +1219,116 @@ def _check_google_places_key() -> bool:
 
 
 # --- AI Search page (Phase 14, local semantic search) ------------------------
+
+
+def _map_lead_label(payload: dict[str, Any]) -> str:
+    location = ", ".join(p for p in (payload["city"], payload["state"]) if p)
+    score = payload["lead_score"] if payload["lead_score"] is not None else "—"
+    return f"{payload['business_name']} — {location or 'no location'} ({score}/100)"
+
+
+def _render_map_page(db_path: Path) -> None:
+    """Map: interactive OpenStreetMap view of leads with stored coordinates."""
+    st.header("Interactive Map")
+    st.caption("Leads with stored coordinates, rendered with OpenStreetMap (free, no key).")
+
+    if MapService is None:
+        st.info("The map module is not available in this environment.")
+        return
+
+    service = MapService(db_path)
+    leads = service.load_leads()
+    if not leads:
+        st.info(
+            "No leads have coordinates yet. Leads discovered via OpenStreetMap "
+            "(or CSV seeds that include lat/lon) get plotted here."
+        )
+        return
+    if not service.folium_available():
+        st.warning("The map renderer (folium) is not installed — run `pip install folium`.")
+        return
+
+    from src.map import legend_items, marker_payload, valid_coordinates
+
+    options = service.option_values(leads)
+
+    cluster = st.checkbox("Cluster nearby markers", value=True, key="map_cluster")
+    f1, f2, f3, f4 = st.columns(4)
+    high_priority = f1.checkbox("Show high-priority only (Hot)", value=False, key="map_high_priority")
+    map_view = f2.selectbox(
+        "Map view", ["Fit all leads"] + options["cities"], key="map_view_city",
+        help="Zoom to one city, or reset to fit all matching leads.",
+    )
+    only_coords = f3.checkbox("Only leads with coordinates", value=True, key="map_only_coords")
+    min_score = int(f4.slider("Min lead score", 0, 100, 0, key="map_min_score"))
+
+    g1, g2, g3, g4 = st.columns(4)
+    priority_labels = g1.multiselect(
+        "Priority label", ["Hot", "Warm", "Cold", "Avoid"], default=[], key="map_priority"
+    )
+    categories = g2.multiselect("Category", options["categories"], default=[], key="map_category")
+    cities = g3.multiselect("City", options["cities"], default=[], key="map_city_filter")
+    states = g4.multiselect("State", options["states"], default=[], key="map_state")
+
+    h1, h2, h3 = st.columns(3)
+    platforms = h1.multiselect("Platform", options["platforms"], default=[], key="map_platform")
+    has_website = h2.selectbox("Has website", ["Any", "Yes", "No"], index=0, key="map_website")
+    has_contact = h3.selectbox("Has contact info", ["Any", "Yes", "No"], index=0, key="map_contact")
+
+    filters: dict[str, Any] = {
+        "min_lead_score": min_score,
+        "priority_labels": list(priority_labels),
+        "categories": list(categories),
+        "cities": list(cities),
+        "states": list(states),
+        "platforms": list(platforms),
+        "has_website": None if has_website == "Any" else has_website == "Yes",
+        "has_contact": None if has_contact == "Any" else has_contact == "Yes",
+        "only_with_coordinates": bool(only_coords),
+    }
+    if high_priority:
+        filters["priority_labels"] = ["Hot"]
+
+    matched = service.filter(leads, **filters)
+    map_leads = [lead for lead in matched if valid_coordinates(lead.latitude, lead.longitude)]
+    no_coords = len(matched) - len(map_leads)
+
+    st.caption(
+        f"{len(map_leads)} matching lead(s) on the map"
+        + (f" — {no_coords} additional match(es) lack coordinates." if no_coords else ".")
+    )
+
+    view_city = None if map_view == "Fit all leads" else map_view
+    html = service.render(matched, cluster=bool(cluster), view_city=view_city)
+    if html is None:
+        st.info("No lead coordinates match the current filters.")
+        return
+
+    components.html(html, height=620, scrolling=False)
+
+    legend = "&nbsp;&nbsp;&nbsp;".join(
+        f'<span style="color:{color};font-weight:bold">&#9679;</span> {label}'
+        for label, color in legend_items()
+    )
+    st.markdown(f"{legend}", unsafe_allow_html=True)
+
+    if map_leads:
+        st.markdown("### Reveal a lead")
+        payloads = {lead.id: marker_payload(lead) for lead in map_leads}
+        reveal_id = int(
+            st.selectbox(
+                "Lead on map",
+                sorted(payloads),
+                format_func=lambda i: _map_lead_label(payloads[i]),
+                key="map_reveal",
+            )
+        )
+        payload = payloads[reveal_id]
+        st.json(payload)
+        if st.button("Open in Leads view", key=f"map_open_{reveal_id}"):
+            st.session_state["selected_lead_id"] = reveal_id
+            st.session_state["page_select"] = "Leads"
+            st.rerun()
 
 
 def _render_search_page(db_path: Path) -> None:

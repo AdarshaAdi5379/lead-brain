@@ -57,6 +57,12 @@ except Exception:  # pragma: no cover
     ChatService = None  # type: ignore
 
 
+try:  # Optional (grounded outreach generation, Phase 16)
+    from src.outreach.service import OutreachService
+except Exception:  # pragma: no cover
+    OutreachService = None  # type: ignore
+
+
 @dataclass(frozen=True)
 class LeadRow:
     id: int
@@ -492,8 +498,7 @@ def main() -> None:
             st.warning(f"Last error: {selected.last_error}")
 
     with right:
-        draft = _outreach_email(selected)
-        st.text_area("Outreach email draft", value=draft, height=320)
+        _render_outreach_section(db_path, selected.id)
 
         _render_contact_section(selected)
 
@@ -942,40 +947,59 @@ def _passes_page_filters(page: dict[str, Any], filters: dict[str, bool]) -> bool
     return False
 
 
-def _outreach_email(lead: LeadRow) -> str:
-    name = lead.business_name or "there"
-    city = ", ".join([p for p in [lead.city, lead.state] if p])
-    city_line = f" in {city}" if city else ""
+def _render_outreach_section(db_path: Path, lead_id: int) -> None:
+    """On-demand, grounded outreach draft (style/length/contact selectors)."""
+    st.markdown("### Outreach draft")
+    if OutreachService is None:
+        st.info("The outreach generator is not available in this environment.")
+        return
 
-    signals: list[str] = []
-    if not lead.email:
-        signals.append("I couldn’t find a clear email address on the site")
-    if lead.load_speed and str(lead.load_speed).lower() == "slow":
-        signals.append("the site felt a bit slow to load")
-    if lead.platform and str(lead.platform).lower() in {"wix", "weebly", "squarespace"}:
-        signals.append(f"it looks like it may be built on {lead.platform}")
-    if lead.complexity and str(lead.complexity).lower() == "basic":
-        signals.append("the current site looks fairly minimal")
+    try:
+        service = OutreachService(db_path)
+    except Exception as exc:
+        st.error(f"Outreach initialization failed: {exc}")
+        return
 
-    signals_text = ""
-    if signals:
-        signals_text = "I took a quick look at your website and noticed " + ", ".join(signals[:2]) + ".\n\n"
-
-    url_line = f"Website: {lead.website_url}\n\n" if lead.website_url else ""
-
-    return (
-        f"Subject: Quick website improvement idea for {lead.business_name or 'your business'}\n\n"
-        f"Hi {name},\n\n"
-        f"I'm a freelance web developer{city_line}. {signals_text}"
-        "If you’d like, I can send a short (no-pressure) list of 2–3 improvements that can help:\n"
-        "- get more calls / form submissions\n"
-        "- improve speed and mobile experience\n"
-        "- make the site look more modern and trustworthy\n\n"
-        f"{url_line}"
-        "Would you be open to a 10-minute call this week? If you reply with the best number/time, I’ll work around you.\n\n"
-        "Thanks,\n"
-        "— Your Name\n"
+    style = st.selectbox("Style", list(service.styles()), key=f"out_style_{lead_id}")
+    length = st.selectbox("Length", list(service.lengths()), key=f"out_length_{lead_id}")
+    method = st.selectbox(
+        "Contact method", service.contact_methods(lead_id), key=f"out_method_{lead_id}"
     )
+
+    if st.button("Generate outreach", key=f"out_gen_{lead_id}"):
+        draft = service.generate(
+            lead_id, style=style, length=length, contact_method=method
+        )
+        st.session_state[f"out_draft_{lead_id}"] = draft
+        st.session_state[f"out_text_{lead_id}"] = draft.message
+
+    draft = st.session_state.get(f"out_draft_{lead_id}")
+    if draft is None:
+        st.caption("Pick options and click Generate to create a personalized draft.")
+        return
+
+    st.text_area(
+        "Message",
+        value=draft.message,
+        height=280,
+        key=f"out_text_{lead_id}",
+    )
+
+    backend = service.backend_name()
+    st.caption(
+        f"Mode: {'Local LLM' if draft.mode == 'llm' else 'Template'} · "
+        f"LLM backend: {backend} · Contact: {draft.contact_display or 'no direct method available'}"
+    )
+
+    facts = draft.facts_used or draft.facts_available
+    if facts:
+        st.markdown("**Facts referenced:**")
+        for label in facts:
+            st.markdown(f"- ✓ {label}")
+    for warning in draft.warnings:
+        st.caption(f"⚠ {warning}")
+    if draft.issues:
+        st.warning("; ".join(draft.issues))
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:

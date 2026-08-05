@@ -53,7 +53,19 @@ class TestOutreachContext(unittest.TestCase):
         self.db.add_detection(lead_id, "WordPress")
         self.db.add_seo(lead_id, 35, "poor")
         self.db.add_visual(lead_id, 40)
+        self.db.add_score(lead_id, 62, "Warm")
         self.db.add_opportunity(lead_id, "Redesign", 85, ["Outdated design"])
+        self.db.connection.execute(
+            "UPDATE visual_audits SET total_pages_audited = 3,"
+            " pages_with_weak_mobile_signal = 1, pages_with_modern_design_signal = 0"
+            " WHERE lead_id = ?",
+            (lead_id,),
+        )
+        self.db.connection.execute(
+            "UPDATE business_opportunities SET recommended_services_json = ? WHERE lead_id = ?",
+            ('["Redesign"]', lead_id),
+        )
+        self.db.connection.commit()
 
         context = build_outreach_context(self._intel(lead_id))
         assert context is not None
@@ -70,6 +82,43 @@ class TestOutreachContext(unittest.TestCase):
         self.assertEqual(context["opportunity_summary"]["count"], 1)
         self.assertTrue(context["reachability"]["email"])
         self.assertEqual(context["reachability"]["best_contact_method"], "email")
+        self.assertEqual(context["lead_score"], 62)
+        self.assertEqual(context["priority"], "Warm")
+        self.assertTrue(context["recommended_outreach_angle"])
+        self.assertIn("Weak SEO score", context["top_seo_issues"])
+        self.assertIn("Weak mobile experience", context["top_visual_issues"])
+        self.assertIn("Outdated design", context["top_visual_issues"])
+        self.assertEqual(context["top_opportunities"][0]["label"], "Redesign")
+        self.assertEqual(context["top_opportunities"][0]["recommended_services"], ["Redesign"])
+        self.assertIn("Taco Stand", context["business_summary"])
+
+    def test_reachability_priority_order(self) -> None:
+        lead_id = self.db.add_lead(name="All Channels", website="https://all.com")
+        self.db.add_contact(
+            lead_id,
+            email="a@b.com",
+            linkedin_url="https://linkedin.com/x",
+            facebook_url="https://fb.com/x",
+            whatsapp_url="https://wa.me/1",
+            contact_form_url="https://all.com/form",
+            phone="111",
+        )
+        context = build_outreach_context(self._intel(lead_id))
+        assert context is not None
+        self.assertEqual(context["reachability"]["best_contact_method"], "email")
+
+    def test_reachability_falls_back_to_lower_priority(self) -> None:
+        lead_id = self.db.add_lead(name="Phone Only", website=None)
+        self.db.add_contact(lead_id, phone="111")
+        context = build_outreach_context(self._intel(lead_id))
+        assert context is not None
+        self.assertEqual(context["reachability"]["best_contact_method"], "phone")
+
+    def test_no_reachability(self) -> None:
+        lead_id = self.db.add_lead(name="Bare Co", website=None)
+        context = build_outreach_context(self._intel(lead_id))
+        assert context is not None
+        self.assertIsNone(context["reachability"].get("best_contact_method"))
 
     def test_empties_are_dropped(self) -> None:
         lead_id = self.db.add_lead(name="Bare Co", website=None)

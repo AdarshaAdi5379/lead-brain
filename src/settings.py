@@ -8,6 +8,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 DB_PATH = DATA_DIR / "leads.sqlite"
 
+# Local Excel CRM workbook (Phase 18). Editable CRM layer on top of SQLite;
+# auto-filled from lead data, manual CRM fields win on merge.
+CRM_WORKBOOK_PATH: Path = DATA_DIR / "lead_crm.xlsx"
+
 # Google Places API (Phase 8 — Lead Discovery) [deprecated provider]
 GOOGLE_MAPS_API_KEY: Optional[str] = os.environ.get("GOOGLE_MAPS_API_KEY", "").strip() or None
 PLACES_TEXT_SEARCH_RADIUS: int = int(os.environ.get("GOOGLE_PLACES_TEXT_SEARCH_RADIUS", "50000"))

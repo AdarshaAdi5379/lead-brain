@@ -70,6 +70,12 @@ except Exception:  # pragma: no cover
     MapService = None  # type: ignore
 
 
+try:  # Optional (local Excel CRM workbook, Phase 18)
+    from src.crm.service import CrmService
+except Exception:  # pragma: no cover
+    CrmService = None  # type: ignore
+
+
 @dataclass(frozen=True)
 class LeadRow:
     id: int
@@ -126,7 +132,7 @@ def main() -> None:
         return
 
     page = st.sidebar.radio(
-        "Page", ["Leads", "Map", "AI Search", "AI Chat"], key="page_select"
+        "Page", ["Leads", "Map", "AI Search", "AI Chat", "CRM"], key="page_select"
     )
     if page == "Map":
         _render_map_page(db_path)
@@ -136,6 +142,9 @@ def main() -> None:
         return
     if page == "AI Chat":
         _render_chat_page(db_path)
+        return
+    if page == "CRM":
+        _render_crm_page(db_path)
         return
 
     all_rows: list[LeadRow] = []
@@ -1225,6 +1234,204 @@ def _map_lead_label(payload: dict[str, Any]) -> str:
     location = ", ".join(p for p in (payload["city"], payload["state"]) if p)
     score = payload["lead_score"] if payload["lead_score"] is not None else "—"
     return f"{payload['business_name']} — {location or 'no location'} ({score}/100)"
+
+
+def _render_crm_page(db_path: Path) -> None:
+    """CRM: editable local Excel workbook, synced with the SQLite store."""
+    st.header("CRM")
+    st.caption("Local Excel lead workbook — auto-filled from the pipeline, manual fields are yours to edit.")
+
+    if CrmService is None:
+        st.info("The CRM module is not available in this environment.")
+        return
+
+    service = CrmService(db_path)
+    if not service.openpyxl_available():
+        st.warning("The Excel reader (openpyxl) is not installed — run `pip install openpyxl`.")
+        return
+
+    rows = service.load()
+    if not rows:
+        st.info("No leads yet. Run a discovery search (or refresh from leads) to populate the CRM workbook.")
+        return
+
+    workbook = service.workbook_path()
+    st.caption(f"Workbook: `{workbook}`")
+
+    auto_columns = list(service.auto_columns()) if hasattr(service, "auto_columns") else []
+    manual_columns = list(service.manual_columns())
+    if not auto_columns:
+        auto_columns = [c for c in rows[0] if c not in manual_columns]
+
+    stats = service.statistics(rows)
+    status_counts = stats.get("by_status", {})
+    metric_cols = st.columns(min(5, len(status_counts) + 1))
+    metric_cols[0].metric("Total leads", stats.get("total", 0))
+    for idx, (status, count) in enumerate(sorted(status_counts.items()), start=1):
+        if idx < len(metric_cols):
+            metric_cols[idx].metric(str(status) or "—", count)
+
+    f1, f2, f3, f4, f5 = st.columns(5)
+    statuses = sorted({str(r.get("status") or service.default_status()) for r in rows})
+    priority_labels = sorted({str(r["priority_label"]) for r in rows if r.get("priority_label")})
+    categories = sorted({str(r["category"]) for r in rows if r.get("category")})
+    cities = sorted({str(r["city"]) for r in rows if r.get("city")})
+    assignees = sorted({str(r["assigned_to"]) for r in rows if r.get("assigned_to")})
+    filter_status = f1.multiselect("Status", statuses, default=[], key="crm_f_status")
+    filter_priority = f2.multiselect("Priority label", priority_labels, default=[], key="crm_f_priority")
+    filter_category = f3.multiselect("Category", categories, default=[], key="crm_f_category")
+    filter_city = f4.multiselect("City", cities, default=[], key="crm_f_city")
+    filter_assignee = f5.multiselect("Assigned to", assignees, default=[], key="crm_f_assigned")
+
+    filtered = _crm_filter_rows(rows, filter_status, filter_priority, filter_category, filter_city, filter_assignee)
+
+    a1, a2, a3 = st.columns(3)
+    save_pressed = a1.button("Save edits", type="primary", key="crm_save")
+    refresh_pressed = a2.button("Refresh from leads (keep edits)", key="crm_refresh")
+    with a3:
+        rebuild_confirm = st.checkbox("Discard manual edits", key="crm_rebuild_confirm", help="Required for a full rebuild from the database.")
+        rebuild_pressed = st.button("Full rebuild from leads", key="crm_rebuild", disabled=not rebuild_confirm)
+
+    if refresh_pressed:
+        service.sync()
+        st.rerun()
+    if rebuild_pressed:
+        service.rebuild()
+        st.rerun()
+
+    if pd is not None:
+        edited = _crm_render_editor(filtered, auto_columns, manual_columns)
+        if save_pressed:
+            _crm_save_from_editor(service, edited, filtered)
+    else:
+        edited = _crm_render_editor_fallback(filtered, manual_columns, save_pressed)
+        if save_pressed:
+            _crm_save_from_editor(service, edited, filtered)
+
+    if workbook.exists():
+        st.download_button(
+            "Download workbook (.xlsx)",
+            workbook.read_bytes(),
+            file_name=workbook.name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="crm_download",
+        )
+    st.caption(
+        "Auto columns are managed by the pipeline and read-only. Manual columns "
+        "(status, notes, last contacted, next follow-up, assigned to, best contact "
+        "method) are yours — they win on refresh and sync back to the local database."
+    )
+
+
+def _crm_filter_rows(
+    rows: list[dict[str, Any]],
+    statuses: list[str],
+    priorities: list[str],
+    categories: list[str],
+    cities: list[str],
+    assignees: list[str],
+) -> list[dict[str, Any]]:
+    def _in(column: str, options: list[str]) -> bool:
+        return not options or str(row.get(column) or "") in options
+
+    return [
+        row
+        for row in rows
+        if _in("status", statuses)
+        and _in("priority_label", priorities)
+        and _in("category", categories)
+        and _in("city", cities)
+        and _in("assigned_to", assignees)
+    ]
+
+
+def _crm_render_editor(
+    rows: list[dict[str, Any]],
+    auto_columns: list[str],
+    manual_columns: list[str],
+) -> Any:
+    columns = [c for c in rows[0]] if rows else auto_columns + manual_columns
+    frame = pd.DataFrame(rows)[columns]
+    frame = frame.astype(object).where(pd.notna(frame), None)
+    return st.data_editor(
+        frame,
+        key="crm_editor",
+        disabled=[c for c in columns if c in auto_columns],
+        hide_index=True,
+        use_container_width=True,
+        num_rows="fixed",
+    )
+
+
+def _crm_render_editor_fallback(
+    rows: list[dict[str, Any]],
+    manual_columns: list[str],
+    save_pressed: bool,
+) -> Any:
+    st.caption("pandas is unavailable — editing one lead at a time.")
+    label = {
+        row["lead_id"]: str(row.get("business_name") or f"Lead {row['lead_id']}")
+        for row in rows
+    }
+    chosen = st.selectbox(
+        "Lead",
+        options=sorted(label),
+        format_func=lambda i: label[i],
+        key="crm_edit_lead",
+    )
+    base = next((r for r in rows if int(r["lead_id"]) == int(chosen)), None)
+    if base is None:
+        return []
+    with st.form("crm_edit_form"):
+        values: dict[str, Any] = {}
+        for column in manual_columns:
+            values[column] = st.text_input(column.replace("_", " ").title(), value=str(base.get(column) or ""))
+        submitted = st.form_submit_button("Save lead edits")
+    if submitted or save_pressed:
+        edit = dict(base)
+        for column in manual_columns:
+            edit[column] = values.get(column) or None
+        return [edit]
+    return []
+
+
+def _crm_save_from_editor(service: Any, edited: Any, base_rows: list[dict[str, Any]]) -> None:
+    base_by_id = {int(r["lead_id"]): r for r in base_rows}
+    manual_columns = list(service.manual_columns())
+    updates: list[dict[str, Any]] = []
+    for edit in _crm_records(edited):
+        try:
+            lead_id = int(edit.get("lead_id"))
+        except (TypeError, ValueError):
+            continue
+        base = base_by_id.get(lead_id)
+        if base is None:
+            continue
+        row = dict(base)
+        for column in manual_columns:
+            row[column] = edit.get(column) if edit.get(column) is not None else base.get(column)
+        updates.append(row)
+    if not updates:
+        st.warning("Nothing to save — no matching leads in the current view.")
+        return
+    ok, issues = service.save(updates)
+    if issues:
+        st.warning("Some cells were normalised: " + "; ".join(issues[:5]))
+    if ok:
+        st.success(f"Saved {len(updates)} lead(s) to the CRM workbook and local database.")
+        st.rerun()
+    else:
+        st.error("Could not save: " + "; ".join(issues[:5]))
+
+
+def _crm_records(edited: Any) -> list[dict[str, Any]]:
+    if edited is None:
+        return []
+    if isinstance(edited, list):
+        return edited
+    if pd is not None and hasattr(edited, "to_dict"):
+        return edited.astype(object).where(pd.notna(edited), None).to_dict("records")
+    return []
 
 
 def _render_map_page(db_path: Path) -> None:

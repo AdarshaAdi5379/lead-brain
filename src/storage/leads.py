@@ -272,3 +272,40 @@ def upsert_lead(connection: sqlite3.Connection, lead: LeadUpsert) -> str:
     )
     connection.commit()
     return website_url_normalized
+
+
+def update_crm_fields(
+    connection: sqlite3.Connection,
+    lead_id: int,
+    *,
+    status: Optional[str] = None,
+    notes: Optional[str] = None,
+    last_contacted: Optional[str] = None,
+    next_follow_up: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    best_contact_method: Optional[str] = None,
+) -> int:
+    """Write the editable CRM fields back to a lead (None values are skipped).
+
+    Used by the Excel CRM sync so manual workbook edits survive in SQLite too.
+    Never raises on missing leads; parameterized, so no injection surface.
+    Returns the number of rows actually updated (0 for a missing lead).
+    """
+    fields = {
+        "status": status,
+        "notes": notes,
+        "last_contacted": last_contacted,
+        "next_follow_up": next_follow_up,
+        "assigned_to": assigned_to,
+        "best_contact_method": best_contact_method,
+    }
+    assignments = [f"{column} = ?" for column, value in fields.items() if value is not None]
+    if not assignments:
+        return 0
+    values = [fields[column] for column in fields if fields[column] is not None]
+    cursor = connection.execute(
+        f"UPDATE leads SET {', '.join(assignments)} WHERE id = ?",
+        (*values, int(lead_id)),
+    )
+    connection.commit()
+    return cursor.rowcount

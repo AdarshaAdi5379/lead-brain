@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from src.chat.base import RetrievedContext
 from src.chat.safety import sanitize_text
+from src.contact.helpers import service_areas_from
 
 # Reusable context builder: transforms retrieved rows into a compact, labelled
 # text block per lead and assembles them into one bounded <lead_data> section.
@@ -107,8 +108,43 @@ def build_lead_block(intel: dict[str, Any], *, rationale: Optional[str] = None) 
         contact.append(f"email={sanitize_text(lead.get('email'))}")
     elif not lead.get("website_url"):
         contact.append("email=not stored")
+    if lead.get("owner_name"):
+        contact.append(f"owner={sanitize_text(lead.get('owner_name'))}")
+    if lead.get("postal_code"):
+        contact.append(f"postal code={sanitize_text(lead.get('postal_code'))}")
     if contact:
         lines.append("Contact: " + ", ".join(contact))
+
+    if lead.get("address"):
+        lines.append(f"Address: {sanitize_text(lead.get('address'))}")
+
+    social = [
+        f"{field[: -len('_url')]}={sanitize_text(lead.get(field))}"
+        for field in (
+            "facebook_url",
+            "instagram_url",
+            "linkedin_url",
+            "twitter_url",
+            "youtube_url",
+            "whatsapp_url",
+        )
+        if lead.get(field)
+    ]
+    if social:
+        lines.append("Social: " + ", ".join(social))
+
+    for label, key in (
+        ("Opening hours", "opening_hours"),
+        ("Contact page", "contact_page_url"),
+        ("Contact form", "contact_form_url"),
+        ("Maps", "google_maps_url"),
+    ):
+        if lead.get(key):
+            lines.append(f"{label}: {sanitize_text(lead.get(key))}")
+
+    service_areas = service_areas_from(lead)
+    if service_areas:
+        lines.append("Service areas: " + ", ".join(service_areas))
 
     timestamps = []
     for label, value in (

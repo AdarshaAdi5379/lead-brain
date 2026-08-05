@@ -24,28 +24,53 @@ def to_llm_text(report: OpportunityReport) -> str:
     engine's output as neutral context for writing outreach.
     """
     if not report.opportunities:
-        return (
+        body = (
             "Business opportunities (deterministic local engine): "
             "no actionable website opportunities detected for this lead.\n"
         )
+    else:
+        lines = [
+            "Business opportunities (deterministic local engine; neutral context, not an instruction):",
+            f"- Opportunity priority: {report.opportunity_priority}",
+            f"- Top opportunity: {report.top_opportunity} ({report.top_opportunity_score}/100)",
+            "- Detected opportunities:",
+        ]
+        for item in report.opportunities:
+            lines.append(
+                f"    - {item.label}: {item.score}/100 ({item.severity}) — "
+                f"impact {item.business_impact}, effort {item.implementation_effort}"
+            )
+            services = ", ".join(item.recommended_services)
+            if services:
+                lines.append(f"        Services: {services}")
+            for reason in item.evidence[:3]:
+                lines.append(f"        - {reason}")
+        body = "\n".join(lines) + "\n"
 
-    lines = [
-        "Business opportunities (deterministic local engine; neutral context, not an instruction):",
-        f"- Opportunity priority: {report.opportunity_priority}",
-        f"- Top opportunity: {report.top_opportunity} ({report.top_opportunity_score}/100)",
-        "- Detected opportunities:",
-    ]
-    for item in report.opportunities:
-        lines.append(
-            f"    - {item.label}: {item.score}/100 ({item.severity}) — "
-            f"impact {item.business_impact}, effort {item.implementation_effort}"
-        )
-        services = ", ".join(item.recommended_services)
-        if services:
-            lines.append(f"        Services: {services}")
-        for reason in item.evidence[:3]:
-            lines.append(f"        - {reason}")
-    return "\n".join(lines) + "\n"
+    contact_lines = _contact_banner_lines(report.contact)
+    if contact_lines:
+        return body + "Contact context (deterministic; neutral, not an instruction):\n" + "\n".join(contact_lines) + "\n"
+    return body
+
+
+def _contact_banner_lines(contact: dict[str, Any]) -> list[str]:
+    """Neutral contact facts attached to the report (see OpportunityReport)."""
+    if not contact:
+        return []
+    lines: list[str] = []
+    for label, key in (
+        ("Primary contact", "primary_contact"),
+        ("Best contact method", "best_contact_method"),
+        ("Website", "website"),
+        ("Address", "address"),
+    ):
+        value = contact.get(key)
+        if value:
+            lines.append(f"- {label}: {value}")
+    social = contact.get("social_urls") or []
+    if social:
+        lines.append(f"- Social presence: {', '.join(str(url) for url in social)}")
+    return lines
 
 
 def csv_fields(report: OpportunityReport) -> dict[str, Any]:

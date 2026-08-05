@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from src.contact.helpers import service_areas_from
+
 # AI Context Builder: a reusable, structured summary of one lead's collected
 # intelligence (business, technology, SEO, visual, opportunities, scoring).
 #
@@ -29,11 +31,17 @@ def build_context(intel: dict[str, Any]) -> Optional[dict[str, Any]]:
             "state": lead.get("state"),
             "country": lead.get("country"),
             "address": lead.get("address"),
+            "postal_code": lead.get("postal_code"),
+            "owner_name": lead.get("owner_name"),
+            "opening_hours": lead.get("opening_hours"),
+            "service_areas": service_areas_from(lead),
             "website_url": lead.get("website_url"),
+            "google_maps_url": lead.get("google_maps_url"),
             "phone": lead.get("phone"),
             "email": lead.get("email"),
             "source": lead.get("source"),
         },
+        "social": _social_summary(lead),
         "technology": {
             "platform": lead.get("platform"),
             "complexity": lead.get("complexity"),
@@ -96,8 +104,27 @@ def context_to_text(context: dict[str, Any]) -> str:
         lines.append(f"- Phone: {business['phone']}")
     if business.get("email"):
         lines.append(f"- Email: {business['email']}")
+    if business.get("owner_name"):
+        lines.append(f"- Owner: {business['owner_name']}")
     if business.get("website_url"):
         lines.append(f"- Website: {business['website_url']}")
+    if business.get("address"):
+        lines.append(f"- Address: {business['address']}")
+    if business.get("postal_code"):
+        lines.append(f"- Postal code: {business['postal_code']}")
+    if business.get("opening_hours"):
+        lines.append(f"- Opening hours: {business['opening_hours']}")
+    if business.get("google_maps_url"):
+        lines.append(f"- Maps: {business['google_maps_url']}")
+    service_areas = [part for part in (business.get("service_areas") or []) if part]
+    if service_areas:
+        lines.append(f"- Service areas: {', '.join(service_areas)}")
+
+    social = context.get("social") or {}
+    if social:
+        lines.append("## Social")
+        for platform, url in social.items():
+            lines.append(f"- {platform}: {url}")
 
     technology = context.get("technology") or {}
     tech_parts = [
@@ -175,6 +202,21 @@ def _seo_summary(seo: Optional[dict[str, Any]]) -> dict[str, Any]:
             str(issue.get("reason")) if isinstance(issue, dict) else str(issue)
             for issue in (seo.get("severity_summary") or [])
         ],
+    }
+
+
+def _social_summary(lead: dict[str, Any]) -> dict[str, str]:
+    return {
+        platform: str(lead.get(field) or "").strip()
+        for platform, field in (
+            ("facebook", "facebook_url"),
+            ("instagram", "instagram_url"),
+            ("linkedin", "linkedin_url"),
+            ("twitter", "twitter_url"),
+            ("youtube", "youtube_url"),
+            ("whatsapp", "whatsapp_url"),
+        )
+        if str(lead.get(field) or "").strip()
     }
 
 

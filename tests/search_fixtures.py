@@ -182,3 +182,53 @@ class SearchTestDb:
             (lead_id, "website", label, score, "medium", json.dumps(evidence or ["Outdated design"])),
         )
         self.connection.commit()
+
+    def add_contact(
+        self,
+        lead_id: int,
+        *,
+        owner_name: Optional[str] = None,
+        address: Optional[str] = None,
+        postal_code: Optional[str] = None,
+        country: Optional[str] = None,
+        opening_hours: Optional[str] = None,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
+        facebook_url: Optional[str] = None,
+        instagram_url: Optional[str] = None,
+        linkedin_url: Optional[str] = None,
+        twitter_url: Optional[str] = None,
+        youtube_url: Optional[str] = None,
+        whatsapp_url: Optional[str] = None,
+        contact_page_url: Optional[str] = None,
+        contact_form_url: Optional[str] = None,
+        google_maps_url: Optional[str] = None,
+        service_areas: Optional[list[str]] = None,
+    ) -> None:
+        """Stamp the contact-intelligence columns on a lead row."""
+        values = {
+            "owner_name": owner_name,
+            "address": address,
+            "postal_code": postal_code,
+            "country": country,
+            "opening_hours": opening_hours,
+            "phone": phone,
+            "email": email,
+            "facebook_url": facebook_url,
+            "instagram_url": instagram_url,
+            "linkedin_url": linkedin_url,
+            "twitter_url": twitter_url,
+            "youtube_url": youtube_url,
+            "whatsapp_url": whatsapp_url,
+            "contact_page_url": contact_page_url,
+            "contact_form_url": contact_form_url,
+            "google_maps_url": google_maps_url,
+            "service_areas_json": (
+                json.dumps(service_areas) if service_areas is not None else None
+            ),
+        }
+        sets = ", ".join(f"{name} = ?" for name in values)
+        self.connection.execute(
+            f"UPDATE leads SET {sets} WHERE id = ?", (*values.values(), lead_id)
+        )
+        self.connection.commit()

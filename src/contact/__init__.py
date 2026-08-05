@@ -9,6 +9,7 @@ LLM, no DB access; the pipeline runs it before boilerplate removal so
 contact-rich markup (headers, footers, forms, social icons) is still present.
 """
 
+from src.contact.display import CONTACT_FIELDS, group_contact_facts, lead_contact_dict
 from src.contact.extractor import (
     extract_contact_signals,
     extract_contact_signals_from_crawl,
@@ -17,9 +18,12 @@ from src.contact.extractor import (
 from src.contact.schema import ContactSignals, merge_contact_signals
 
 __all__ = [
+    "CONTACT_FIELDS",
     "ContactSignals",
     "extract_contact_signals",
     "extract_contact_signals_from_crawl",
     "extract_contact_signals_from_fetch",
+    "group_contact_facts",
+    "lead_contact_dict",
     "merge_contact_signals",
 ]

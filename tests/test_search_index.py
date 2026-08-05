@@ -81,6 +81,56 @@ class TestBuildLeadDocument(unittest.TestCase):
         assert doc is not None
         self.assertEqual(doc.metadata["priority"], "Hot")
 
+    def test_document_contains_contact_sections(self) -> None:
+        lead_id = self.db.add_lead(
+            name="Taco Stand", website="https://taco.com", category="Restaurant",
+            city="Austin", state="TX", country="US",
+        )
+        self.db.add_contact(
+            lead_id,
+            owner_name="Joy",
+            address="100 Main St",
+            postal_code="75039",
+            opening_hours="Mon-Fri 9am-5pm",
+            phone="512-555-0100",
+            email="joy@taco.com",
+            whatsapp_url="https://wa.me/15550100",
+            facebook_url="https://fb.com/taco",
+            contact_page_url="https://taco.com/contact",
+            contact_form_url="https://taco.com/contact-form",
+            google_maps_url="https://maps.example.com/taco",
+            service_areas=["Austin", "Round Rock"],
+        )
+        doc = build_lead_document(self._intel(lead_id))
+        assert doc is not None
+        for marker in (
+            "LOCATION:",
+            "100 Main St",
+            "75039",
+            "SERVICES:",
+            "Austin, Round Rock",
+            "CONTACT:",
+            "owner: Joy",
+            "phone: 512-555-0100",
+            "email: joy@taco.com",
+            "contact page: https://taco.com/contact",
+            "contact form: https://taco.com/contact-form",
+            "SOCIAL:",
+            "whatsapp: https://wa.me/15550100",
+            "facebook: https://fb.com/taco",
+            "OPENING HOURS: Mon-Fri 9am-5pm",
+        ):
+            self.assertIn(marker, doc.text)
+
+    def test_missing_contact_marked_for_searchability(self) -> None:
+        lead_id = self.db.add_lead(name="Bare Co", website="https://bare.com")
+        doc = build_lead_document(self._intel(lead_id))
+        assert doc is not None
+        self.assertIn("no phone", doc.text)
+        self.assertIn("no email", doc.text)
+        self.assertNotIn("LOCATION:", doc.text)
+        self.assertNotIn("SOCIAL:", doc.text)
+
 
 class TestSearchIndexService(unittest.TestCase):
     def setUp(self) -> None:

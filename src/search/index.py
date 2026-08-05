@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from src.contact.helpers import service_areas_from
 from src.search.cache import document_hash
 
 # Deterministic document builder: every lead becomes exactly one searchable
@@ -44,6 +45,16 @@ class SearchDocument:
     document_hash: str
 
 
+_SOCIAL_FIELDS = (
+    ("facebook", "facebook_url"),
+    ("instagram", "instagram_url"),
+    ("linkedin", "linkedin_url"),
+    ("twitter", "twitter_url"),
+    ("youtube", "youtube_url"),
+    ("whatsapp", "whatsapp_url"),
+)
+
+
 def build_lead_document(intel: dict[str, Any]) -> Optional[SearchDocument]:
     """Build the semantic document for one lead's intelligence dict.
 
@@ -83,12 +94,59 @@ def _document_text(lead_id: int, lead: dict[str, Any], intel: dict[str, Any]) ->
     if not (name or category or location):
         sections.append(f"BUSINESS: lead {lead_id}")
 
+    location_parts = [
+        part
+        for part in (
+            str(lead.get("address") or "").strip(),
+            str(lead.get("postal_code") or "").strip(),
+            str(lead.get("google_maps_url") or "").strip(),
+        )
+        if part
+    ]
+    if location_parts:
+        sections.append("LOCATION: " + " | ".join(location_parts))
+
+    service_areas = service_areas_from(lead)
+    if service_areas:
+        sections.append("SERVICES: " + ", ".join(service_areas))
+
     website = str(lead.get("website_url") or "").strip()
     phone = str(lead.get("phone") or "").strip()
     email = str(lead.get("email") or "").strip()
-    contact = " | ".join(part for part in (phone, email, website) if part)
-    if contact:
-        sections.append("CONTACT: " + contact)
+
+    contact_parts = [
+        part
+        for part in (
+            f"owner: {str(lead.get('owner_name') or '').strip()}" if lead.get("owner_name") else "",
+            f"phone: {phone}" if phone else "",
+            f"email: {email}" if email else "",
+            f"website: {website}" if website else "",
+            f"contact page: {str(lead.get('contact_page_url') or '').strip()}"
+            if lead.get("contact_page_url")
+            else "",
+            f"contact form: {str(lead.get('contact_form_url') or '').strip()}"
+            if lead.get("contact_form_url")
+            else "",
+        )
+        if part
+    ]
+    if not phone:
+        contact_parts.append("no phone")
+    if not email:
+        contact_parts.append("no email")
+    if contact_parts:
+        sections.append("CONTACT: " + " | ".join(contact_parts))
+
+    social_parts = [
+        f"{platform}: {str(lead.get(field) or '').strip()}"
+        for platform, field in _SOCIAL_FIELDS
+        if lead.get(field)
+    ]
+    if social_parts:
+        sections.append("SOCIAL: " + " | ".join(social_parts))
+
+    if lead.get("opening_hours"):
+        sections.append("OPENING HOURS: " + str(lead.get("opening_hours")).strip())
 
     platform = str(lead.get("platform") or "").strip()
     complexity = str(lead.get("complexity") or "").strip()

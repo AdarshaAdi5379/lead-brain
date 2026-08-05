@@ -7,7 +7,7 @@ from src.opportunities.report import (
     csv_fields_from_rows,
     to_llm_text,
 )
-from tests.scoring_fixtures import no_website_inputs, weak_site_inputs
+from tests.scoring_fixtures import no_website_inputs, strong_site_inputs, weak_site_inputs
 from tests.test_opportunity_detectors import _score_for
 
 
@@ -58,6 +58,26 @@ class TestOpportunityReport(unittest.TestCase):
     def test_to_llm_text_empty_report(self) -> None:
         text = to_llm_text(detect_opportunities(no_website_inputs()))
         self.assertIn("no actionable website opportunities", text)
+        self.assertNotIn("Contact context", text)
+
+    def test_to_llm_text_includes_contact_context(self) -> None:
+        report = detect_opportunities(strong_site_inputs(), _score_for(strong_site_inputs()))
+        text = to_llm_text(report)
+        self.assertIn("Contact context", text)
+        self.assertIn("- Primary contact: acme@example.com", text)
+        self.assertIn("- Best contact method: email", text)
+        self.assertIn("- Website: https://acme.example.com", text)
+
+    def test_to_llm_text_contact_without_channel_fields(self) -> None:
+        report = detect_opportunities(weak_site_inputs(), _score_for(weak_site_inputs()))
+        text = to_llm_text(report)
+        self.assertIn("- Website: http://weak.example.com", text)
+        self.assertNotIn("Primary contact", text)
+        self.assertNotIn("Best contact method", text)
+
+    def test_report_dict_includes_contact(self) -> None:
+        report = detect_opportunities(strong_site_inputs(), _score_for(strong_site_inputs()))
+        self.assertEqual(report.to_dict()["contact"]["email"], "acme@example.com")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 import streamlit as st
 
+from src.contact.display import CONTACT_FIELDS, group_contact_facts
 from src.settings import DB_PATH
 from src.storage.db import init_db
 from src.storage.opportunities import opportunities_by_lead as lead_opportunities_by_lead
@@ -505,7 +506,7 @@ def main() -> None:
         else:
             st.caption("No technology detections stored for this lead.")
 
-        _render_opportunities_section(opp_by_lead.get(selected.id))
+        _render_opportunities_section(selected, opp_by_lead.get(selected.id))
 
         _render_scoring_section(score_by_lead.get(selected.id))
 
@@ -625,42 +626,24 @@ def _decode_service_areas(raw_json: object) -> list[str]:
 
 
 def _render_contact_section(lead: LeadRow) -> None:
-    """Read-only 'Contact & Social' block inside the lead details panel."""
+    """Read-only contact intelligence block grouped by logical category."""
     st.markdown("### Contact & Social (deterministic)")
-    fields = [
-        ("Owner", lead.owner_name),
-        ("Address", lead.address),
-        ("Country", lead.country),
-        ("Opening hours", lead.opening_hours),
-        ("Postal code", lead.postal_code),
-        ("Phone", lead.phone),
-        ("Email", lead.email),
-        ("Website", lead.website_url),
-    ]
-    for label, value in fields:
-        if value:
-            st.markdown(f"- **{label}:** {value}")
-
-    socials = [
-        ("Facebook", lead.facebook_url),
-        ("Instagram", lead.instagram_url),
-        ("LinkedIn", lead.linkedin_url),
-        ("Twitter/X", lead.twitter_url),
-        ("YouTube", lead.youtube_url),
-        ("WhatsApp", lead.whatsapp_url),
-        ("Google Maps", lead.google_maps_url),
-        ("Contact page", lead.contact_page_url),
-        ("Contact form", lead.contact_form_url),
-    ]
-    for label, url in socials:
-        if url:
-            st.markdown(f"- **{label}:** [{url}]({url})")
-
-    if lead.service_areas:
-        st.markdown(f"- **Service areas:** {', '.join(lead.service_areas)}")
-
-    if not any(v for _, v in fields if v) and not any(v for _, v in socials if v):
+    contact = {name: getattr(lead, name) for name in CONTACT_FIELDS}
+    rows = group_contact_facts(contact)
+    if not rows:
         st.caption("No structured contact facts stored for this lead.")
+        return
+
+    current_group: Optional[str] = None
+    for group, label, value in rows:
+        if group != current_group:
+            st.markdown(f"#### {group}")
+            current_group = group
+        if label in {"Google Maps", "Website", "Contact page", "Contact form", "Facebook",
+                     "Instagram", "LinkedIn", "Twitter/X", "YouTube", "WhatsApp"}:
+            st.markdown(f"- **{label}:** [{value}]({value})")
+        else:
+            st.markdown(f"- **{label}:** {value}")
 
 
 def _label_for_id(rows: list[LeadRow], lead_id: int) -> str:
@@ -672,8 +655,11 @@ def _label_for_id(rows: list[LeadRow], lead_id: int) -> str:
     return f"{name} — {score} ({row.priority or '—'})"
 
 
-def _render_opportunities_section(opportunities: Optional[list[dict[str, Any]]]) -> None:
+def _render_opportunities_section(
+    lead: LeadRow, opportunities: Optional[list[dict[str, Any]]]
+) -> None:
     st.markdown("### Business opportunities (deterministic)")
+    _render_opportunity_contact_line(lead)
     if not opportunities:
         st.caption("No business opportunities detected for this lead.")
         return
@@ -708,6 +694,33 @@ def _render_opportunities_section(opportunities: Optional[list[dict[str, Any]]])
                 st.markdown("**Evidence**")
                 for reason in evidence:
                     st.markdown(f"- {reason}")
+
+
+def _render_opportunity_contact_line(lead: LeadRow) -> None:
+    """Compact, deterministic contact context alongside the opportunity list."""
+    facts: list[str] = []
+    if lead.email:
+        facts.append(f"email: {lead.email}")
+    if lead.phone:
+        facts.append(f"phone: {lead.phone}")
+    if lead.website_url:
+        facts.append(f"website: {lead.website_url}")
+    social_count = sum(
+        1
+        for url in (
+            lead.facebook_url,
+            lead.instagram_url,
+            lead.linkedin_url,
+            lead.twitter_url,
+            lead.youtube_url,
+            lead.whatsapp_url,
+        )
+        if url
+    )
+    if social_count:
+        facts.append(f"social: {social_count} profile(s)")
+    if facts:
+        st.caption("Contact: " + " · ".join(facts))
 
 
 def _render_scoring_section(score_row: Optional[dict[str, Any]]) -> None:
@@ -1003,6 +1016,21 @@ def _as_dict(row: LeadRow) -> dict[str, Any]:
         "outreach_sent": row.outreach_sent,
         "outreach_sent_at": row.outreach_sent_at,
         "notes": row.notes,
+        "owner_name": row.owner_name,
+        "address": row.address,
+        "country": row.country,
+        "opening_hours": row.opening_hours,
+        "postal_code": row.postal_code,
+        "facebook_url": row.facebook_url,
+        "instagram_url": row.instagram_url,
+        "linkedin_url": row.linkedin_url,
+        "twitter_url": row.twitter_url,
+        "youtube_url": row.youtube_url,
+        "whatsapp_url": row.whatsapp_url,
+        "contact_page_url": row.contact_page_url,
+        "contact_form_url": row.contact_form_url,
+        "google_maps_url": row.google_maps_url,
+        "service_areas": row.service_areas,
     }
 
 

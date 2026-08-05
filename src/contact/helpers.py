@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from src.llm_extraction import _sanitize_email, _sanitize_phone
@@ -89,3 +90,25 @@ def page_priority_key(page_label: Optional[str]) -> int:
     if label in {"about", "aboutus", "about-us", "who-we-are", "team"}:
         return 2
     return 9
+
+
+def service_areas_from(lead: dict[str, Any]) -> list[str]:
+    """Decoded service-area list from a lead dict.
+
+    ``src/storage.search`` already decodes ``service_areas_json`` into a
+    ``service_areas`` list; this also tolerates raw JSON or plain strings so
+    hand-built dicts in tests and consumers work identically.
+    """
+    value = lead.get("service_areas")
+    if isinstance(value, (list, tuple)):
+        items = value
+    elif value is not None:
+        try:
+            items = json.loads(value)
+        except (TypeError, ValueError):
+            items = [value]
+        if not isinstance(items, list):
+            items = [items]
+    else:
+        items = []
+    return [str(item) for item in items if str(item).strip()]

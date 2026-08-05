@@ -161,6 +161,8 @@ def leads_intelligence(
 
     Returns ``{lead_id: {"lead": {...}, "detections": [...], "seo": {...}|None,
     "visual": {...}|None, "score": {...}|None, "opportunities": [...]}}``.
+    The decoded ``lead`` dict includes ``service_areas`` (list) alongside the
+    raw ``service_areas_json`` column.
     """
     if lead_ids:
         placeholders = ",".join("?" * len(lead_ids))
@@ -219,6 +221,9 @@ def leads_intelligence(
     intelligence: dict[int, dict[str, Any]] = {}
     for lead in leads:
         lead_id = int(lead["id"])
+        lead["service_areas"] = [
+            str(area) for area in _decode_json(lead.get("service_areas_json"), [])
+        ]
         intelligence[lead_id] = {
             "lead": lead,
             "detections": detections.get(lead_id, []),

@@ -5,7 +5,11 @@ from src.opportunities import detect_opportunities
 from src.opportunities.base import severity_for_score
 from src.opportunities.config import OpportunityConfig, default_config
 from tests.opportunity_fixtures import ecommerce_inputs, legacy_platform_inputs
-from tests.scoring_fixtures import no_website_inputs, strong_site_inputs, weak_site_inputs
+from tests.scoring_fixtures import (
+    no_website_inputs,
+    strong_site_inputs,
+    weak_site_inputs,
+)
 from tests.test_opportunity_detectors import _score_for
 
 
@@ -38,6 +42,41 @@ class TestOpportunityAggregator(unittest.TestCase):
         self.assertEqual(report.opportunity_priority, "Minimal Opportunity")
         self.assertEqual(report.top_opportunity, "")
         self.assertEqual(report.top_opportunity_score, 0)
+        self.assertEqual(report.contact, {})
+
+    def test_contact_context_from_strong_site_inputs(self) -> None:
+        report = detect_opportunities(strong_site_inputs(), _score_for(strong_site_inputs()))
+        contact = report.contact
+        self.assertEqual(contact["website"], "https://acme.example.com")
+        self.assertEqual(contact["phone"], "512-555-0100")
+        self.assertEqual(contact["email"], "acme@example.com")
+        self.assertEqual(contact["address"], "100 Main St")
+        self.assertEqual(contact["primary_contact"], "acme@example.com")
+        self.assertEqual(contact["best_contact_method"], "email")
+
+    def test_contact_context_phone_only(self) -> None:
+        from src.scoring.base import ScoringInputs
+
+        inputs = ScoringInputs(
+            extracted={
+                "business_name": "Phone Co",
+                "phone": "512-555-0100",
+                "email": None,
+            },
+            category="plumber",
+            city="Austin",
+            state="TX",
+            website_url="http://phone.example.com",
+            fetch_ok=True,
+        )
+        report = detect_opportunities(inputs, _score_for(inputs))
+        self.assertEqual(report.contact.get("best_contact_method"), "phone")
+        self.assertEqual(report.contact.get("primary_contact"), "512-555-0100")
+        self.assertNotIn("email", report.contact)
+
+    def test_contact_context_missing_on_no_website(self) -> None:
+        report = detect_opportunities(no_website_inputs())
+        self.assertEqual(report.contact, {})
 
     def test_deterministic_across_runs(self) -> None:
         inputs = weak_site_inputs()

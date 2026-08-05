@@ -160,6 +160,25 @@ class TestLeadIntelligence(unittest.TestCase):
         self.assertIsNone(intel["visual"])
         self.assertIsNone(intel["score"])
         self.assertEqual(intel["opportunities"], [])
+        self.assertEqual(intel["lead"]["service_areas"], [])
+
+    def test_service_areas_decoded_on_lead(self) -> None:
+        lead_id = self.db.add_lead(name="Taco Stand", website="https://taco.com")
+        self.db.add_contact(lead_id, service_areas=["Austin", "Round Rock"])
+        intel = search_storage.lead_intelligence(self.connection, lead_id)
+        assert intel is not None
+        self.assertEqual(intel["lead"]["service_areas"], ["Austin", "Round Rock"])
+        self.assertIn("service_areas_json", intel["lead"])
+
+    def test_bad_service_areas_json_decodes_empty(self) -> None:
+        lead_id = self.db.add_lead(name="Taco Stand", website="https://taco.com")
+        self.connection.execute(
+            "UPDATE leads SET service_areas_json = 'not json' WHERE id = ?", (lead_id,)
+        )
+        self.connection.commit()
+        intel = search_storage.lead_intelligence(self.connection, lead_id)
+        assert intel is not None
+        self.assertEqual(intel["lead"]["service_areas"], [])
 
 
 class TestDecodeRobustness(unittest.TestCase):

@@ -65,13 +65,19 @@ class Opportunity:
 
 @dataclass(frozen=True)
 class OpportunityReport:
-    """Lead-level summary over all detected opportunities."""
+    """Lead-level summary over all detected opportunities.
+
+    ``contact`` is a small, input-derived contact context (website, phone,
+    email, address, social URLs, primary contact / best contact method)
+    attached for reporting only — it never influences the opportunity score.
+    """
 
     opportunities: tuple[Opportunity, ...] = ()
     opportunity_priority: str = "Minimal Opportunity"
     top_opportunity: str = ""
     top_opportunity_score: int = 0
     opportunity_count: int = 0
+    contact: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +86,7 @@ class OpportunityReport:
             "top_opportunity": self.top_opportunity,
             "top_opportunity_score": self.top_opportunity_score,
             "opportunity_count": self.opportunity_count,
+            "contact": dict(self.contact),
         }
 
 

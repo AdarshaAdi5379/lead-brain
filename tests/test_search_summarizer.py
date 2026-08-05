@@ -61,6 +61,41 @@ class TestBuildContext(unittest.TestCase):
         self.assertEqual(context["opportunities"]["opportunity_score"], 0)
         self.assertEqual(context["seo"], {})
         self.assertEqual(context["visual"], {})
+        self.assertEqual(context["social"], {})
+
+    def test_contact_facts_in_context(self) -> None:
+        lead_id = self.db.add_lead(
+            name="Taco Stand", website="https://taco.com", category="Restaurant",
+            city="Austin", state="TX", country="US",
+        )
+        self.db.add_contact(
+            lead_id,
+            owner_name="Joy",
+            address="100 Main St",
+            postal_code="75039",
+            opening_hours="Mon-Fri 9am-5pm",
+            phone="512-555-0100",
+            email="joy@taco.com",
+            whatsapp_url="https://wa.me/15550100",
+            facebook_url="https://fb.com/taco",
+            google_maps_url="https://maps.example.com/taco",
+            service_areas=["Austin", "Round Rock"],
+        )
+        context = build_context(self._intel(lead_id))
+        assert context is not None
+        business = context["business"]
+        self.assertEqual(business["owner_name"], "Joy")
+        self.assertEqual(business["postal_code"], "75039")
+        self.assertEqual(business["opening_hours"], "Mon-Fri 9am-5pm")
+        self.assertEqual(business["google_maps_url"], "https://maps.example.com/taco")
+        self.assertEqual(business["service_areas"], ["Austin", "Round Rock"])
+        self.assertEqual(
+            context["social"],
+            {
+                "facebook": "https://fb.com/taco",
+                "whatsapp": "https://wa.me/15550100",
+            },
+        )
 
 
 class TestContextToText(unittest.TestCase):
@@ -87,6 +122,43 @@ class TestContextToText(unittest.TestCase):
     def test_unknown_lead_label(self) -> None:
         text = context_to_text({"business": {}, "technology": {}, "opportunities": {}, "scoring": {}})
         self.assertIn("Business", text)
+
+    def test_text_includes_contact_and_social(self) -> None:
+        text = context_to_text(
+            {
+                "business": {
+                    "business_name": "Taco Stand",
+                    "city": "Austin",
+                    "state": "TX",
+                    "owner_name": "Joy",
+                    "postal_code": "75039",
+                    "opening_hours": "Mon-Fri 9am-5pm",
+                    "service_areas": ["Austin"],
+                    "google_maps_url": "https://maps.example.com/taco",
+                },
+                "social": {"whatsapp": "https://wa.me/15550100"},
+                "technology": {"platform": "WordPress", "detections": []},
+                "seo": {"site_score": 35, "overall_health": "poor"},
+                "visual": {"visual_score": 40, "visual_health_label": "needs_work"},
+                "opportunities": {
+                    "count": 1,
+                    "top_opportunity": "Redesign",
+                    "opportunity_score": 85,
+                    "items": [{"label": "Redesign", "score": 85, "evidence": []}],
+                },
+                "scoring": {"final_score": 70, "priority_label": "Hot"},
+            }
+        )
+        for needle in (
+            "Owner: Joy",
+            "Postal code: 75039",
+            "Opening hours: Mon-Fri 9am-5pm",
+            "Service areas: Austin",
+            "Maps: https://maps.example.com/taco",
+            "## Social",
+            "whatsapp: https://wa.me/15550100",
+        ):
+            self.assertIn(needle, text)
 
 
 if __name__ == "__main__":

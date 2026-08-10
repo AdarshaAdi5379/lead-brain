@@ -38,20 +38,65 @@ class OpenAIUsage:
 
 class OpenAIHTTPError(RuntimeError):
     def __init__(self, status: int, body: str) -> None:
-        super().__init__(f"OpenAI API error {status}: {body}")
+        super().__init__(f"OpenRouter API error {status}: {body}")
         self.status = status
         self.body = body
 
 
+# Error statuses that must never be retried: invalid key/auth, forbidden,
+# rate limited, or a malformed request. Free OpenRouter tiers are strictly
+# quota-limited, so a retry on 429 would just burn the daily allowance.
+NO_RETRY_STATUSES = frozenset({400, 401, 403, 404, 429})
+
+# Transient server-side statuses that may be retried once.
+TRANSIENT_STATUSES = frozenset({500, 502, 503, 504})
+
+
 def _base_url() -> str:
-    return os.environ.get("OPENAI_BASE_URL", "https://api.openai.com").rstrip("/")
+    return os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
 
 
 def _api_key() -> str:
-    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not key:
-        raise RuntimeError("OPENAI_API_KEY is not set")
+        raise RuntimeError("OPENROUTER_API_KEY is not set")
     return key
+
+
+def _extra_headers() -> dict[str, str]:
+    """Optional OpenRouter attribution headers (never required)."""
+    headers: dict[str, str] = {}
+    referer = os.environ.get("OPENROUTER_HTTP_REFERER", "").strip()
+    title = os.environ.get("OPENROUTER_X_TITLE", "").strip()
+    if referer:
+        headers["HTTP-Referer"] = referer
+    if title:
+        headers["X-Title"] = title
+    return headers
+
+
+def _post_json(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    timeout_s: int,
+) -> dict[str, Any]:
+    """POST a JSON payload with the shared OpenRouter auth headers."""
+    data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {_api_key()}",
+        "Content-Type": "application/json",
+    }
+    headers.update(_extra_headers())
+    request = urllib.request.Request(url, data=data, method="POST", headers=headers)
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            return json.loads(raw)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+        raise OpenAIHTTPError(getattr(exc, "code", 0) or 0, body[:2000]) from exc
 
 
 def create_response(
@@ -62,39 +107,23 @@ def create_response(
     timeout_s: int = 60,
 ) -> tuple[str, Optional[OpenAIUsage], dict[str, Any]]:
     """
-    Minimal OpenAI Responses API call using stdlib urllib.
+    Minimal OpenAI-compatible Chat Completions call against OpenRouter
+    (stdlib urllib). OpenRouter supports this endpoint for every model,
+    including the free router.
 
     Returns:
       (output_text, usage, raw_payload)
     """
 
-    url = f"{_base_url()}/v1/responses"
+    url = f"{_base_url()}/chat/completions"
     payload: dict[str, Any] = {
         "model": model,
-        "input": [
-            {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
-            {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
         ],
     }
-    data = json.dumps(payload).encode("utf-8")
-
-    request = urllib.request.Request(
-        url,
-        data=data,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {_api_key()}",
-            "Content-Type": "application/json",
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-            parsed = json.loads(raw)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
-        raise OpenAIHTTPError(getattr(exc, "code", 0) or 0, body[:2000]) from exc
+    parsed = _post_json(url, payload, timeout_s=timeout_s)
 
     output_text = _extract_output_text(parsed)
     usage = OpenAIUsage.from_payload(parsed)
@@ -103,23 +132,29 @@ def create_response(
 
 def _extract_output_text(payload: dict[str, Any]) -> str:
     """
-    Best-effort extraction of the model's text output from a Responses API payload.
+    Best-effort extraction of the model's text output from a
+    Chat Completions payload.
     """
 
-    output = payload.get("output")
-    if isinstance(output, list):
+    choices = payload.get("choices")
+    if isinstance(choices, list):
         parts: list[str] = []
-        for item in output:
-            if not isinstance(item, dict):
+        for choice in choices:
+            if not isinstance(choice, dict):
                 continue
-            content = item.get("content")
-            if not isinstance(content, list):
+            message = choice.get("message")
+            if not isinstance(message, dict):
                 continue
-            for block in content:
-                if isinstance(block, dict) and block.get("type") in {"output_text", "text"}:
-                    text = block.get("text")
-                    if isinstance(text, str):
-                        parts.append(text)
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                parts.append(content)
+            elif isinstance(content, list):
+                # Tool-style / multimodal replies with text parts.
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text")
+                        if isinstance(text, str):
+                            parts.append(text)
         if parts:
             return "\n".join(parts).strip()
 
@@ -142,53 +177,34 @@ def create_vision_response(
     timeout_s: int = 90,
 ) -> dict[str, Any]:
     """
-    Minimal multimodal call against the OpenAI Responses API (stdlib urllib).
+    Minimal multimodal call against the OpenRouter Chat Completions endpoint
+    (stdlib urllib).
 
     ``images`` are base64-encoded JPEG data URLs. The model's output is parsed
     as strict JSON and returned as a dict; unparseable output yields an empty
     dict so callers can degrade gracefully.
     """
-    user_content: list[dict[str, Any]] = [
-        {"type": "input_text", "text": prompt},
-    ]
+    user_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     for encoded in images:
         user_content.append(
-            {"type": "input_image", "image_url": f"data:image/jpeg;base64,{encoded}"}
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}}
         )
 
-    input_parts: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": user_content}]
     if system_prompt.strip():
-        input_parts.insert(
+        messages.insert(
             0,
-            {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+            {"role": "system", "content": system_prompt},
         )
 
-    url = f"{_base_url()}/v1/responses"
+    url = f"{_base_url()}/chat/completions"
     payload: dict[str, Any] = {
         "model": model,
-        "input": input_parts,
-        "max_output_tokens": int(max_tokens),
+        "messages": messages,
+        "max_tokens": int(max_tokens),
         "temperature": 0.2,
     }
-    data = json.dumps(payload).encode("utf-8")
-
-    request = urllib.request.Request(
-        url,
-        data=data,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {_api_key()}",
-            "Content-Type": "application/json",
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-            parsed = json.loads(raw)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
-        raise OpenAIHTTPError(getattr(exc, "code", 0) or 0, body[:2000]) from exc
+    parsed = _post_json(url, payload, timeout_s=timeout_s)
 
     output_text = _extract_output_text(parsed)
     if not output_text.strip():
@@ -198,4 +214,3 @@ def create_vision_response(
         return value if isinstance(value, dict) else {}
     except ValueError:
         return {}
-

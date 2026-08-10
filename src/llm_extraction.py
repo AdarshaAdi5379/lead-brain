@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from src.extraction_schema import ExtractedLead, validate_extracted_lead
-from src.llm.openai_responses import OpenAIUsage, create_response
+from src.llm.openai_responses import (
+    NO_RETRY_STATUSES,
+    OpenAIHTTPError,
+    OpenAIUsage,
+    create_response,
+)
 from src.scraping.browser_fetch import FetchResult
 
 
@@ -22,6 +27,33 @@ _EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b")
 # Very forgiving; we only use this as a validator after stripping obvious noise.
 _PHONE_RE = re.compile(r"^\+?[0-9().\-\s]{7,}$")
 
+_IP_ADDRESS_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+
+def _resolve_extraction_models(
+    model_primary: Optional[str],
+    model_fallback: Optional[str],
+) -> tuple[str, str]:
+    """Resolve primary/fallback models with OpenRouter as the active default.
+
+    Priority for the primary model: explicit parameter, OPENROUTER_MODEL,
+    legacy OPENAI_MODEL_PRIMARY (backward compat), then the free router.
+    The fallback is used for exactly one bounded retry on transient errors;
+    it also defaults to the free router so no paid model is selected by default.
+    """
+    primary = (
+        model_primary
+        or os.environ.get("OPENROUTER_MODEL", "").strip()
+        or os.environ.get("OPENAI_MODEL_PRIMARY", "").strip()
+        or "openrouter/free"
+    )
+    fallback = (
+        model_fallback
+        or os.environ.get("OPENAI_MODEL_FALLBACK", "").strip()
+        or "openrouter/free"
+    )
+    return primary, fallback
+
 
 def extract_lead_from_fetch(
     fetch: FetchResult,
@@ -34,10 +66,11 @@ def extract_lead_from_fetch(
     detected_visual_text: Optional[str] = None,
 ) -> ExtractionResult:
     """
-    Calls an OpenAI model to extract a lead payload, then validates against ExtractedLead contract.
+    Calls an OpenRouter model to extract a lead payload, then validates against
+    the ExtractedLead contract.
 
     Notes:
-    - Expects OPENAI_API_KEY to be set.
+    - Expects OPENROUTER_API_KEY to be set.
     - Uses text-first input (visible text + small HTML snippet), not full HTML dumps.
     """
 
@@ -49,10 +82,7 @@ def extract_lead_from_fetch(
         detected_visual_text=detected_visual_text,
     )
 
-    model = model_primary or os.environ.get("OPENAI_MODEL_PRIMARY", "").strip() or "gpt-4.1-nano"
-    fallback = (
-        model_fallback or os.environ.get("OPENAI_MODEL_FALLBACK", "").strip() or "gpt-4o-mini"
-    )
+    model, fallback = _resolve_extraction_models(model_primary, model_fallback)
 
     try:
         output_text, usage = _call_llm(
@@ -95,10 +125,7 @@ def extract_lead_from_merged_content(
         detected_visual_text=detected_visual_text,
     )
 
-    model = model_primary or os.environ.get("OPENAI_MODEL_PRIMARY", "").strip() or "gpt-4.1-nano"
-    fallback = (
-        model_fallback or os.environ.get("OPENAI_MODEL_FALLBACK", "").strip() or "gpt-4o-mini"
-    )
+    model, fallback = _resolve_extraction_models(model_primary, model_fallback)
 
     output_text, usage = _call_llm(
         model=model,
@@ -120,6 +147,13 @@ def _call_llm(
     fallback: str,
     timeout_s: int,
 ) -> tuple[str, Optional[OpenAIUsage]]:
+    """Call the model, retrying exactly once on transient failures only.
+
+    Never retries on 400/401/403/404/429 (invalid request, bad key, rate
+    limit) — a retry would just burn the free OpenRouter quota. Transient
+    errors (5xx, timeout, connection failure) get one bounded retry with the
+    fallback model.
+    """
     try:
         output_text, usage, _raw = create_response(
             model=model,
@@ -128,16 +162,23 @@ def _call_llm(
             timeout_s=timeout_s,
         )
         return output_text, usage
-    except Exception:
-        if fallback and fallback != model:
-            output_text, usage, _raw = create_response(
-                model=fallback,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                timeout_s=timeout_s,
-            )
-            return output_text, usage
+    except OpenAIHTTPError as exc:
+        if exc.status in NO_RETRY_STATUSES:
+            raise
+    except RuntimeError:
+        # Missing/invalid configuration (e.g. no API key): not transient.
         raise
+    except Exception:
+        # Timeout / connection failure: transient by default.
+        pass
+
+    output_text, usage, _raw = create_response(
+        model=fallback,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        timeout_s=timeout_s,
+    )
+    return output_text, usage
 
 
 def _system_prompt() -> str:
@@ -351,6 +392,8 @@ def _sanitize_phone(value: Any) -> Optional[str]:
 
     # Remove common label prefixes and keep the core.
     text = re.sub(r"(?i)\b(phone|tel|call)\b[:\s]*", "", text).strip()
+    if _IP_ADDRESS_RE.match(text.lstrip("+")):
+        return None
     if not _PHONE_RE.match(text):
         return None
 

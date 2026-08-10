@@ -14,9 +14,17 @@ python -m playwright install --with-deps chromium
 Create a `.env` file:
 
 ```bash
-OPENAI_API_KEY=...
+OPENROUTER_API_KEY=...
 
-# Optional (only required if you use --max-cost-usd)
+# Optional (defaults shown)
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=openrouter/free
+
+# Optional attribution headers sent to OpenRouter when set
+# OPENROUTER_HTTP_REFERER=https://example.com
+# OPENROUTER_X_TITLE=lead-brain
+
+# Optional (only required if you use --max-cost-usd; override the free default)
 OPENAI_INPUT_COST_PER_1K=0.0
 OPENAI_OUTPUT_COST_PER_1K=0.0
 ```
@@ -75,7 +83,7 @@ VISUAL_ENABLED=0 python main.py --input business_urls.csv --limit 200
 Tunables (env / via `src/settings.py`): `VISUAL_ENABLED` (default true),
 `VISUAL_VIEWPORT_DESKTOP` (`1365x900`), `VISUAL_VIEWPORT_MOBILE` (`390x844`),
 `VISUAL_FULLPAGE_MAX_HEIGHT` (12000), `VISUAL_LLM_ENABLED` (default false),
-`VISUAL_LLM_MODEL` / `OPENAI_VISION_MODEL` (`gpt-4o-mini`), `VISUAL_SCREENSHOT_DIR`
+`VISUAL_LLM_MODEL` / `OPENAI_VISION_MODEL` (`openrouter/free`), `VISUAL_SCREENSHOT_DIR`
 (`data/screenshots`, gitignored). Per-lead capture caps: `max_screenshots=5`,
 `max_internal_pages=3`.
 

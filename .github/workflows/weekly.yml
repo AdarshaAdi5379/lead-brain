@@ -17,7 +17,7 @@ jobs:
   run:
     runs-on: ubuntu-latest
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       # Set pricing so --max-cost-usd can be enforced.
       # Update these to your real model prices.
       OPENAI_INPUT_COST_PER_1K: "0.0"

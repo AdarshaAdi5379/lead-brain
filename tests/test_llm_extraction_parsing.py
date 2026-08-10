@@ -24,6 +24,11 @@ class TestLLMExtractionParsing(unittest.TestCase):
         self.assertEqual(_sanitize_phone("Phone: +1 (555) 123-4567"), "+1 (555) 123-4567")
         self.assertIsNone(_sanitize_phone("call us at five five five"))
 
+    def test_sanitize_phone_rejects_ipv4(self) -> None:
+        self.assertIsNone(_sanitize_phone("157.50.193.132"))
+        self.assertIsNone(_sanitize_phone("+157.50.193.132"))
+        self.assertEqual(_sanitize_phone("512.555.0134"), "512.555.0134")
+
 
 if __name__ == "__main__":
     unittest.main()

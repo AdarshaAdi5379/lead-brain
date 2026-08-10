@@ -23,7 +23,7 @@ class VisualConfig:
     fullpage_max_height: int = 12_000
     analysis_grid: int = 96
     llm_enabled: bool = False
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "openrouter/free"
     llm_max_images: int = 2
 
     # Health bands (score -> label), inclusive minimums.

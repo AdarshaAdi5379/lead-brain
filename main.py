@@ -312,7 +312,9 @@ def _run_pipeline(connection, logger, seeds: list[SeedRow], args) -> None:
         if not pricing.enabled:
             raise SystemExit(
                 "--max-cost-usd was set, but pricing is not configured. "
-                "Set OPENAI_INPUT_COST_PER_1K and/or OPENAI_OUTPUT_COST_PER_1K."
+                "Set OPENAI_INPUT_COST_PER_1K and/or OPENAI_OUTPUT_COST_PER_1K "
+                "(OpenRouter free models are zero-cost by default, so a cost "
+                "cap needs explicit per-1K prices)."
             )
         logger.info(
             "Cost stop enabled at $%.4f (prices: input=$%.6f/1K, output=$%.6f/1K)",

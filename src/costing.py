@@ -33,6 +33,11 @@ def pricing_config(*, model: Optional[str] = None) -> PricingConfig:
     1) If OPENAI_INPUT_COST_PER_1K / OPENAI_OUTPUT_COST_PER_1K are set, use them.
     2) Else, if OPENAI_PRICING_PRESET is not "off", try a built-in per-model preset.
     3) Else, return zeros (disabled).
+
+    The active default model is OpenRouter's free router (`openrouter/free`),
+    which has no price preset — so free requests report zero cost. Explicit
+    per-1K env prices still win, which allows pricing a paid OpenRouter model
+    manually.
     """
 
     input_cost = _as_float_env("OPENAI_INPUT_COST_PER_1K", default=0.0)
@@ -46,8 +51,9 @@ def pricing_config(*, model: Optional[str] = None) -> PricingConfig:
 
     resolved_model = (
         (model or "").strip()
+        or os.environ.get("OPENROUTER_MODEL", "").strip()
         or os.environ.get("OPENAI_MODEL_PRIMARY", "").strip()
-        or "gpt-4.1-nano"
+        or "openrouter/free"
     )
     preset = _pricing_preset_for_model(resolved_model)
     if preset is not None:

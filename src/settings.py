@@ -8,6 +8,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 DB_PATH = DATA_DIR / "leads.sqlite"
 
+# LLM provider (Phase 16 — OpenRouter). Active default provider for all LLM
+# calls (extraction + optional visual summarizer). OpenAI-compatible base URL;
+# the free router (`openrouter/free`) is the default model. Legacy OPENAI_*
+# variables remain honored only as backward-compatible overrides.
+OPENROUTER_API_KEY: Optional[str] = os.environ.get("OPENROUTER_API_KEY", "").strip() or None
+OPENROUTER_BASE_URL: str = os.environ.get(
+    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+).rstrip("/")
+OPENROUTER_MODEL: str = os.environ.get("OPENROUTER_MODEL", "").strip() or "openrouter/free"
+# Optional attribution headers sent to OpenRouter only when set.
+OPENROUTER_HTTP_REFERER: str = os.environ.get("OPENROUTER_HTTP_REFERER", "").strip()
+OPENROUTER_X_TITLE: str = os.environ.get("OPENROUTER_X_TITLE", "").strip()
+
 # Local Excel CRM workbook (Phase 18). Editable CRM layer on top of SQLite;
 # auto-filled from lead data, manual CRM fields win on merge.
 CRM_WORKBOOK_PATH: Path = DATA_DIR / "lead_crm.xlsx"
@@ -95,7 +108,7 @@ VISUAL_FULLPAGE_MAX_HEIGHT: int = int(os.environ.get("VISUAL_FULLPAGE_MAX_HEIGHT
 VISUAL_SCREENSHOT_DIR: Path = PROJECT_ROOT / os.environ.get("VISUAL_SCREENSHOT_DIR", "data/screenshots")
 # Optional multimodal summarizer (gated: off by default, no API key needed).
 VISUAL_LLM_ENABLED: bool = os.environ.get("VISUAL_LLM_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
-VISUAL_LLM_MODEL: str = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
+VISUAL_LLM_MODEL: str = os.environ.get("OPENAI_VISION_MODEL", "").strip() or "openrouter/free"
 
 # Local semantic search + AI knowledge base (Phase 14). Fully local, offline,
 # no cloud and no paid APIs. Default engine is dependency-free: a deterministic

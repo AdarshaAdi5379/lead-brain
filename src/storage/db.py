@@ -80,11 +80,27 @@ CREATE TABLE IF NOT EXISTS leads (
   assigned_to TEXT,
   best_contact_method TEXT,
 
+  enrichment_status TEXT,
+  enrichment_source TEXT,
+  enrichment_confidence REAL,
+  enrichment_last_error TEXT,
+  enrichment_last_checked_at TEXT,
+
   FOREIGN KEY (run_id) REFERENCES scraping_runs(run_id) ON DELETE SET NULL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_leads_website_url_normalized
   ON leads(website_url_normalized);
+
+CREATE TABLE IF NOT EXISTS website_enrichment_cache (
+  query_key TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  website_url TEXT,
+  source TEXT,
+  confidence REAL,
+  error TEXT,
+  checked_at REAL NOT NULL
+);
 
 CREATE INDEX IF NOT EXISTS ix_leads_score ON leads(score);
 CREATE INDEX IF NOT EXISTS ix_leads_priority ON leads(priority);
@@ -374,6 +390,11 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         ("email_source", "TEXT"),
         ("phone_confidence", "REAL"),
         ("email_confidence", "REAL"),
+        ("enrichment_status", "TEXT"),
+        ("enrichment_source", "TEXT"),
+        ("enrichment_confidence", "REAL"),
+        ("enrichment_last_error", "TEXT"),
+        ("enrichment_last_checked_at", "TEXT"),
     ]
     for column, column_type in _ADDITIVE_LEAD_COLUMNS:
         if column not in lead_columns:

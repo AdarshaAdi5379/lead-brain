@@ -167,7 +167,7 @@ def _element_to_candidate(element: dict[str, Any], category: str) -> Optional[Bu
     return BusinessCandidate(
         business_name=name,
         category=category,
-        url=_canonical_url(_first_tag(tags, "website", "contact:website")),
+        url=_canonical_url(_first_tag(tags, "website", "contact:website", "contact:web", "url")),
         phone=_first_tag(tags, "phone", "contact:phone", "tel"),
         email=_first_tag(tags, "email", "contact:email"),
         city=_first_tag(tags, "addr:city"),

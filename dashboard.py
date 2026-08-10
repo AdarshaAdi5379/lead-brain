@@ -114,6 +114,9 @@ class LeadRow:
     service_areas: list[str] = field(default_factory=list)
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    enrichment_status: Optional[str] = None
+    enrichment_source: Optional[str] = None
+    enrichment_confidence: Optional[float] = None
 
 
 def main() -> None:
@@ -525,6 +528,8 @@ def main() -> None:
 
         _render_contact_section(selected)
 
+        _render_enrichment_section(selected)
+
         detections = tech_by_lead.get(selected.id, [])
         if detections:
             st.markdown("### Detected technologies")
@@ -591,7 +596,8 @@ def _fetch_leads(connection: sqlite3.Connection) -> list[LeadRow]:
           owner_name, address, country, opening_hours, postal_code,
           facebook_url, instagram_url, linkedin_url, twitter_url, youtube_url,
           whatsapp_url, contact_page_url, contact_form_url, google_maps_url,
-          service_areas_json, latitude, longitude
+          service_areas_json, latitude, longitude,
+          enrichment_status, enrichment_source, enrichment_confidence
         FROM leads
         ORDER BY extracted_at DESC
         """
@@ -637,6 +643,9 @@ def _fetch_leads(connection: sqlite3.Connection) -> list[LeadRow]:
                 service_areas=_decode_service_areas(row["service_areas_json"]),
                 latitude=row["latitude"],
                 longitude=row["longitude"],
+                enrichment_status=row["enrichment_status"],
+                enrichment_source=row["enrichment_source"],
+                enrichment_confidence=row["enrichment_confidence"],
             )
         )
     return leads
@@ -674,6 +683,20 @@ def _render_contact_section(lead: LeadRow) -> None:
             st.markdown(f"- **{label}:** [{value}]({value})")
         else:
             st.markdown(f"- **{label}:** {value}")
+
+
+def _render_enrichment_section(lead: LeadRow) -> None:
+    """Website enrichment status (only shown when the engine ran for this lead)."""
+    if not lead.enrichment_status:
+        return
+    st.markdown("### Website enrichment")
+    label = str(lead.enrichment_status).replace("_", " ").title()
+    confidence = lead.enrichment_confidence
+    confidence_text = f"{confidence:.2f}" if confidence is not None else "—"
+    st.markdown(f"- **Status:** {label}")
+    if lead.enrichment_source:
+        st.markdown(f"- **Source:** {lead.enrichment_source}")
+    st.markdown(f"- **Confidence:** {confidence_text}")
 
 
 def _label_for_id(rows: list[LeadRow], lead_id: int) -> str:

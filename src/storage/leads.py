@@ -52,6 +52,11 @@ class LeadUpsert:
     contact_form_url: Optional[str] = None
     google_maps_url: Optional[str] = None
     service_areas: Optional[list[str]] = None
+    enrichment_status: Optional[str] = None
+    enrichment_source: Optional[str] = None
+    enrichment_confidence: Optional[float] = None
+    enrichment_last_error: Optional[str] = None
+    enrichment_last_checked_at: Optional[str] = None
 
 
 UPSERT_SQL = """
@@ -96,7 +101,12 @@ INSERT INTO leads (
   contact_page_url,
   contact_form_url,
   google_maps_url,
-  service_areas_json
+  service_areas_json,
+  enrichment_status,
+  enrichment_source,
+  enrichment_confidence,
+  enrichment_last_error,
+  enrichment_last_checked_at
 )
 VALUES (
   :run_id,
@@ -139,7 +149,12 @@ VALUES (
   :contact_page_url,
   :contact_form_url,
   :google_maps_url,
-  :service_areas_json
+  :service_areas_json,
+  :enrichment_status,
+  :enrichment_source,
+  :enrichment_confidence,
+  :enrichment_last_error,
+  :enrichment_last_checked_at
 )
 ON CONFLICT(website_url_normalized) DO UPDATE SET
   run_id = excluded.run_id,
@@ -181,7 +196,12 @@ ON CONFLICT(website_url_normalized) DO UPDATE SET
   contact_page_url = excluded.contact_page_url,
   contact_form_url = excluded.contact_form_url,
   google_maps_url = excluded.google_maps_url,
-  service_areas_json = excluded.service_areas_json;
+  service_areas_json = excluded.service_areas_json,
+  enrichment_status = COALESCE(excluded.enrichment_status, leads.enrichment_status),
+  enrichment_source = COALESCE(excluded.enrichment_source, leads.enrichment_source),
+  enrichment_confidence = COALESCE(excluded.enrichment_confidence, leads.enrichment_confidence),
+  enrichment_last_error = COALESCE(excluded.enrichment_last_error, leads.enrichment_last_error),
+  enrichment_last_checked_at = COALESCE(excluded.enrichment_last_checked_at, leads.enrichment_last_checked_at);
 """
 
 
@@ -308,6 +328,11 @@ def upsert_lead(connection: sqlite3.Connection, lead: LeadUpsert) -> str:
             "contact_form_url": lead.contact_form_url,
             "google_maps_url": lead.google_maps_url,
             "service_areas_json": json.dumps(lead.service_areas or []),
+            "enrichment_status": lead.enrichment_status,
+            "enrichment_source": lead.enrichment_source,
+            "enrichment_confidence": lead.enrichment_confidence,
+            "enrichment_last_error": lead.enrichment_last_error,
+            "enrichment_last_checked_at": lead.enrichment_last_checked_at,
         },
     )
     connection.commit()

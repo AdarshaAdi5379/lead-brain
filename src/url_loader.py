@@ -26,6 +26,12 @@ class SeedRow:
     postal_code: Optional[str] = None
     opening_hours: Optional[str] = None
     source: Optional[str] = None
+    # Website enrichment (set by the pre-pipeline enrichment pass).
+    enrichment_status: Optional[str] = None
+    enrichment_source: Optional[str] = None
+    enrichment_confidence: Optional[float] = None
+    enrichment_last_error: Optional[str] = None
+    enrichment_last_checked_at: Optional[str] = None
 
 
 _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {

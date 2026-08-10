@@ -25,16 +25,34 @@ OPENROUTER_X_TITLE: str = os.environ.get("OPENROUTER_X_TITLE", "").strip()
 # auto-filled from lead data, manual CRM fields win on merge.
 CRM_WORKBOOK_PATH: Path = DATA_DIR / "lead_crm.xlsx"
 
-# Google Places API (Phase 8 — Lead Discovery) [deprecated provider]
-GOOGLE_MAPS_API_KEY: Optional[str] = os.environ.get("GOOGLE_MAPS_API_KEY", "").strip() or None
-PLACES_TEXT_SEARCH_RADIUS: int = int(os.environ.get("GOOGLE_PLACES_TEXT_SEARCH_RADIUS", "50000"))
-PLACES_LANGUAGE: str = os.environ.get("GOOGLE_PLACES_LANGUAGE", "en")
-
 # OpenStreetMap-based discovery (Phase 9 — default provider, no API keys)
 OSM_USER_AGENT: str = os.environ.get(
     "OSM_USER_AGENT", "lead-brain/1.0 (local lead finder; contact: leadfinder@localhost)"
 )
 OVERPASS_API_URL: str = os.environ.get("OVERPASS_API_URL", "https://overpass-api.de/api/interpreter")
+
+# Website enrichment (Phase 19). Free, local-first website recovery for leads
+# without a website URL: OSM tags + email-domain candidates + an anonymous
+# free web search (DuckDuckGo HTML), all deterministically verified. Skipped
+# automatically under --no-crawl (offline runs stay offline).
+ENRICHMENT_ENABLED: bool = os.environ.get("ENRICHMENT_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+ENRICHMENT_SEARCH_ENABLED: bool = os.environ.get("ENRICHMENT_SEARCH_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+ENRICHMENT_ACCEPT_THRESHOLD: float = float(os.environ.get("ENRICHMENT_ACCEPT_THRESHOLD", "0.75"))
+ENRICHMENT_CONFIDENCE_HIGH_MIN: float = float(os.environ.get("ENRICHMENT_CONFIDENCE_HIGH_MIN", "0.75"))
+ENRICHMENT_CONFIDENCE_MEDIUM_MIN: float = float(os.environ.get("ENRICHMENT_CONFIDENCE_MEDIUM_MIN", "0.60"))
+ENRICHMENT_MAX_CANDIDATES: int = int(os.environ.get("ENRICHMENT_MAX_CANDIDATES", "3"))
+ENRICHMENT_MAX_SEARCH_RESULTS: int = int(os.environ.get("ENRICHMENT_MAX_SEARCH_RESULTS", "5"))
+ENRICHMENT_FETCH_TIMEOUT_S: float = float(os.environ.get("ENRICHMENT_FETCH_TIMEOUT_S", "10"))
+ENRICHMENT_MAX_FETCH_BYTES: int = int(os.environ.get("ENRICHMENT_MAX_FETCH_BYTES", "300000"))
+ENRICHMENT_CACHE_TTL_DAYS: int = int(os.environ.get("ENRICHMENT_CACHE_TTL_DAYS", "30"))
+ENRICHMENT_USER_AGENT: str = os.environ.get("ENRICHMENT_USER_AGENT", "") or OSM_USER_AGENT
+ENRICHMENT_SEARCH_URL: str = os.environ.get("ENRICHMENT_SEARCH_URL", "https://html.duckduckgo.com/html/")
+ENRICHMENT_SEARCH_TIMEOUT_S: float = float(os.environ.get("ENRICHMENT_SEARCH_TIMEOUT_S", "12"))
+
+# Google Places API (Phase 8 — Lead Discovery) [deprecated provider]
+GOOGLE_MAPS_API_KEY: Optional[str] = os.environ.get("GOOGLE_MAPS_API_KEY", "").strip() or None
+PLACES_TEXT_SEARCH_RADIUS: int = int(os.environ.get("GOOGLE_PLACES_TEXT_SEARCH_RADIUS", "50000"))
+PLACES_LANGUAGE: str = os.environ.get("GOOGLE_PLACES_LANGUAGE", "en")
 NOMINATIM_URL: str = os.environ.get("NOMINATIM_URL", "https://nominatim.openstreetmap.org/search")
 NOMINATIM_REVERSE_URL: str = os.environ.get(
     "NOMINATIM_REVERSE_URL", "https://nominatim.openstreetmap.org/reverse"

@@ -27,6 +27,8 @@ from src.discovery.discovery import (
     load_discovery_queries_csv,
 )
 from src.discovery.cache import clear_discovery_cache
+from src.enrichment.config import from_settings as enrichment_config_from_settings
+from src.enrichment.service import run_enrichment
 from src.extraction_schema import validate_extracted_lead
 from src.fingerprinting.base import PLATFORM_FROM_TECHNOLOGY, Detection
 from src.fingerprinting.detector import FingerprintResult, TechnologyDetector, build_site_evidence
@@ -142,6 +144,9 @@ EXPORT_COLUMNS = [
     "contact_form_url",
     "google_maps_url",
     "service_areas",
+    "enrichment_status",
+    "enrichment_source",
+    "enrichment_confidence",
 ]
 
 
@@ -303,6 +308,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip incremental search indexing for this run",
     )
+    parser.add_argument(
+        "--no-enrichment",
+        action="store_true",
+        help="Skip website enrichment for leads without a website URL "
+        "(also skipped automatically with --no-crawl)",
+    )
     return parser
 
 
@@ -324,6 +335,7 @@ def _run_pipeline(connection, logger, seeds: list[SeedRow], args) -> None:
         )
 
     run_id = start_run(connection)
+    seeds = _enrich_seeds_pass(connection, logger, seeds, args)
     stats = _run_seeds(
         connection,
         logger,
@@ -344,6 +356,23 @@ def _run_pipeline(connection, logger, seeds: list[SeedRow], args) -> None:
 
     if not args.no_index:
         _index_run_leads(logger, run_id, rebuild=args.rebuild_index)
+
+
+def _enrich_seeds_pass(connection, logger, seeds: list[SeedRow], args) -> list[SeedRow]:
+    """Website enrichment pre-pass: runs before the crawl for website-less seeds.
+
+    Offline runs (--no-crawl) and explicit --no-enrichment skips it entirely.
+    A seed with a verified website flows into the normal crawl pipeline; the
+    rest stay valid website-less leads with their enrichment status recorded.
+    """
+    if args.no_crawl or args.no_enrichment:
+        return seeds
+    config = enrichment_config_from_settings(settings_module)
+    if not config.enabled:
+        return seeds
+    enriched, report = run_enrichment(connection, seeds, config, logger=logger)
+    logger.info("Website enrichment: %s", report.to_log_summary())
+    return enriched
 
 
 def _process_seeds_through_pipeline(connection, logger, seeds, args) -> None:
@@ -675,6 +704,11 @@ def _run_seeds(
                     contact_form_url=contact["contact_form_url"],
                     google_maps_url=contact["google_maps_url"],
                     service_areas=contact["service_areas"],
+                    enrichment_status=seed.enrichment_status,
+                    enrichment_source=seed.enrichment_source,
+                    enrichment_confidence=seed.enrichment_confidence,
+                    enrichment_last_error=seed.enrichment_last_error,
+                    enrichment_last_checked_at=seed.enrichment_last_checked_at,
                 )
 
                 try:
@@ -905,6 +939,11 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
         contact_form_url=contact["contact_form_url"],
         google_maps_url=contact["google_maps_url"],
         service_areas=contact["service_areas"],
+        enrichment_status=seed.enrichment_status,
+        enrichment_source=seed.enrichment_source,
+        enrichment_confidence=seed.enrichment_confidence,
+        enrichment_last_error=seed.enrichment_last_error,
+        enrichment_last_checked_at=seed.enrichment_last_checked_at,
     )
 
     try:
@@ -1140,7 +1179,8 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
           address, country, opening_hours, postal_code, owner_name,
           facebook_url, instagram_url, linkedin_url, twitter_url, youtube_url,
           whatsapp_url, contact_page_url, contact_form_url, google_maps_url,
-          service_areas_json
+          service_areas_json,
+          enrichment_status, enrichment_source, enrichment_confidence
         FROM leads
         WHERE run_id = ? AND (score IS NOT NULL AND score >= ?)
         ORDER BY score DESC, extracted_at DESC

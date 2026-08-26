@@ -75,13 +75,14 @@ Severity legend: CRITICAL (security compromise / major data corruption / fundame
 - **How to reproduce:** open the dashboard CRM tab with rows in the workbook.
 - **Recommended fix:** pass `row` into `_in(row, column, options)`.
 
-### H-5 — Re-runs clobber stored contact columns with NULLs (only phone/email protected)
+### H-5 — Re-runs clobber stored contact columns with NULLs (only phone/email protected) — ✅ FIXED (Phase R3)
 - **File:** `src/storage/leads.py`
 - **Function:** `upsert_lead`
 - **Line:** 159–204
 - **Root cause:** `ON CONFLICT DO UPDATE` overwrites address, owner_name, social URLs, opening_hours, postal_code, service_areas, lat/lon etc. with `excluded.*` unconditionally; only phone/email use `better_contact`, and only the 5 `enrichment_*` columns use `COALESCE`.
 - **Impact:** a weaker re-run (failed crawl → empty signals) NULLs out previously stored deterministic contact data — "valid value → NULL overwrite".
 - **Recommended fix:** apply `COALESCE(excluded.x, leads.x)` per column (or per-field preservation checks).
+- **Fixed (R3):** `upsert_lead` now normalizes empty/whitespace-only protected text fields to `None`, and the `ON CONFLICT DO UPDATE` uses `COALESCE`/`NULLIF` for contact/identity/enrichment columns — a NULL/empty/whitespace incoming value never erases a stored valid value, while valid new data still lands (last-write-wins for valid→valid; phone/email keep `better_contact`; `service_areas_json` guards `[]`/`""`). Intentionally not preserved per-run state columns (score/priority/platform/complexity/load_speed/extraction_success/last_error) match existing replace-* semantics. Regression tests: `tests/test_upsert_preservation.py` (NULL/empty/whitespace preservation, new-data writes, valid→valid, OSM→crawl, crawl enrichment, zero-coordinate handling, pipeline+export+dashboard integration).
 
 ### H-6 — Scoring reads the LLM's raw phone/email, not the stored deterministic winner
 - **File:** `main.py`, `src/scoring/dimensions.py`

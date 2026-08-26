@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from src.contact.sources import better_contact
@@ -158,45 +158,60 @@ VALUES (
 )
 ON CONFLICT(website_url_normalized) DO UPDATE SET
   run_id = excluded.run_id,
-  business_name = excluded.business_name,
+  -- Preservation rule (H-5 fix): contact/identity/enrichment columns are
+  -- protected against destructive updates — a NULL, empty, whitespace-only
+  -- (or, for service areas, '[]') incoming value never erases a previously
+  -- stored valid value; an incoming valid value still overwrites (last-write-
+  -- wins for valid→valid; phone/email additionally use better_contact).
+  -- Intentionally NOT preserved (per-run state, replaced each run):
+  --   platform/complexity/load_speed, score, priority, extraction_success,
+  --   extracted_at, last_error — matching the delete-then-insert semantics
+  --   used for detections/audits/scores/opportunities.
+  business_name = COALESCE(NULLIF(trim(excluded.business_name), ''), leads.business_name),
   phone = excluded.phone,
   email = excluded.email,
   phone_source = excluded.phone_source,
   email_source = excluded.email_source,
   phone_confidence = excluded.phone_confidence,
   email_confidence = excluded.email_confidence,
-  website_url = excluded.website_url,
+  website_url = COALESCE(NULLIF(trim(excluded.website_url), ''), leads.website_url),
   platform = excluded.platform,
   complexity = excluded.complexity,
   load_speed = excluded.load_speed,
-  city = excluded.city,
-  state = excluded.state,
-  category = excluded.category,
+  city = COALESCE(NULLIF(trim(excluded.city), ''), leads.city),
+  state = COALESCE(NULLIF(trim(excluded.state), ''), leads.state),
+  category = COALESCE(NULLIF(trim(excluded.category), ''), leads.category),
   score = excluded.score,
   priority = excluded.priority,
   extraction_success = excluded.extraction_success,
   extracted_at = datetime('now'),
   last_error = excluded.last_error,
-  source = excluded.source,
-  osm_id = excluded.osm_id,
-  osm_type = excluded.osm_type,
-  latitude = excluded.latitude,
-  longitude = excluded.longitude,
-  address = excluded.address,
-  opening_hours = excluded.opening_hours,
-  country = excluded.country,
-  owner_name = excluded.owner_name,
-  postal_code = excluded.postal_code,
-  facebook_url = excluded.facebook_url,
-  instagram_url = excluded.instagram_url,
-  linkedin_url = excluded.linkedin_url,
-  twitter_url = excluded.twitter_url,
-  youtube_url = excluded.youtube_url,
-  whatsapp_url = excluded.whatsapp_url,
-  contact_page_url = excluded.contact_page_url,
-  contact_form_url = excluded.contact_form_url,
-  google_maps_url = excluded.google_maps_url,
-  service_areas_json = excluded.service_areas_json,
+  source = COALESCE(NULLIF(trim(excluded.source), ''), leads.source),
+  osm_id = COALESCE(NULLIF(trim(excluded.osm_id), ''), leads.osm_id),
+  osm_type = COALESCE(NULLIF(trim(excluded.osm_type), ''), leads.osm_type),
+  latitude = COALESCE(excluded.latitude, leads.latitude),
+  longitude = COALESCE(excluded.longitude, leads.longitude),
+  address = COALESCE(NULLIF(trim(excluded.address), ''), leads.address),
+  opening_hours = COALESCE(NULLIF(trim(excluded.opening_hours), ''), leads.opening_hours),
+  country = COALESCE(NULLIF(trim(excluded.country), ''), leads.country),
+  owner_name = COALESCE(NULLIF(trim(excluded.owner_name), ''), leads.owner_name),
+  postal_code = COALESCE(NULLIF(trim(excluded.postal_code), ''), leads.postal_code),
+  facebook_url = COALESCE(NULLIF(trim(excluded.facebook_url), ''), leads.facebook_url),
+  instagram_url = COALESCE(NULLIF(trim(excluded.instagram_url), ''), leads.instagram_url),
+  linkedin_url = COALESCE(NULLIF(trim(excluded.linkedin_url), ''), leads.linkedin_url),
+  twitter_url = COALESCE(NULLIF(trim(excluded.twitter_url), ''), leads.twitter_url),
+  youtube_url = COALESCE(NULLIF(trim(excluded.youtube_url), ''), leads.youtube_url),
+  whatsapp_url = COALESCE(NULLIF(trim(excluded.whatsapp_url), ''), leads.whatsapp_url),
+  contact_page_url = COALESCE(NULLIF(trim(excluded.contact_page_url), ''), leads.contact_page_url),
+  contact_form_url = COALESCE(NULLIF(trim(excluded.contact_form_url), ''), leads.contact_form_url),
+  google_maps_url = COALESCE(NULLIF(trim(excluded.google_maps_url), ''), leads.google_maps_url),
+  service_areas_json = CASE
+    WHEN excluded.service_areas_json IS NULL
+      OR trim(excluded.service_areas_json) = ''
+      OR excluded.service_areas_json = '[]'
+    THEN leads.service_areas_json
+    ELSE excluded.service_areas_json
+  END,
   enrichment_status = COALESCE(excluded.enrichment_status, leads.enrichment_status),
   enrichment_source = COALESCE(excluded.enrichment_source, leads.enrichment_source),
   enrichment_confidence = COALESCE(excluded.enrichment_confidence, leads.enrichment_confidence),
@@ -207,6 +222,59 @@ ON CONFLICT(website_url_normalized) DO UPDATE SET
 
 def _clean_key_part(value: Optional[str]) -> str:
     return (value or "").strip().lower()
+
+
+# Text fields protected by the missing-value preservation rule: an incoming
+# value that is NULL/empty/whitespace-only counts as missing and must not
+# erase a previously stored value (bug.md H-5). Normalizing here — inside
+# upsert_lead — protects every caller, not just main.py.
+_PRESERVED_TEXT_FIELDS = (
+    "website_url",
+    "business_name",
+    "city",
+    "state",
+    "category",
+    "source",
+    "osm_id",
+    "osm_type",
+    "address",
+    "opening_hours",
+    "country",
+    "owner_name",
+    "postal_code",
+    "facebook_url",
+    "instagram_url",
+    "linkedin_url",
+    "twitter_url",
+    "youtube_url",
+    "whatsapp_url",
+    "contact_page_url",
+    "contact_form_url",
+    "google_maps_url",
+)
+
+
+def _blank_to_none(value: Optional[str]) -> Optional[str]:
+    """Whitespace-only strings count as missing input."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _normalize_blank_fields(lead: LeadUpsert) -> LeadUpsert:
+    """Treat empty/whitespace-only protected text fields as missing (None)."""
+    changed = False
+    updates: dict[str, Optional[str]] = {}
+    for name in _PRESERVED_TEXT_FIELDS:
+        value = getattr(lead, name)
+        cleaned = _blank_to_none(value)
+        if cleaned is not value and cleaned != value:
+            updates[name] = cleaned
+            changed = True
+    if not changed:
+        return lead
+    return replace(lead, **updates)
 
 
 def _business_dedupe_key(
@@ -241,6 +309,9 @@ def _business_dedupe_key(
 
 
 def upsert_lead(connection: sqlite3.Connection, lead: LeadUpsert) -> str:
+    # Missing-value preservation (H-5): blank text fields count as missing
+    # before any dedupe/merge/SQL logic sees them.
+    lead = _normalize_blank_fields(lead)
     website_url_normalized = (lead.dedupe_key or "").strip()
     if not website_url_normalized:
         website_url_normalized = normalize_url_for_dedupe(lead.website_url)

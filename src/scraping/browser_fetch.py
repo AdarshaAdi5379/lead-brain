@@ -3,6 +3,45 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import urlsplit
+
+from src.net.url_guard import ALLOWED_SCHEMES, UnsafeUrlError, validate_public_http_url
+
+# Schemes that never open a network connection and are harmless as embedded
+# subresources (inline images/fonts/iframes). Everything else that is not
+# http(s) is aborted at the routing layer.
+_NON_NETWORK_REQUEST_SCHEMES = frozenset({"data", "blob", "about"})
+
+
+def _route_request_allowed(url: str, host_cache: dict[str, bool]) -> bool:
+    """Trust-boundary check for Playwright route interception (sync, off-loop).
+
+    Runs in an executor for every request Chromium makes, including redirect
+    hops and frame navigations: a page must not be able to send the browser to
+    ``file://``, localhost, or private/internal IPs.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    scheme = (parts.scheme or "").lower()
+    if scheme not in ALLOWED_SCHEMES:
+        return scheme in _NON_NETWORK_REQUEST_SCHEMES
+
+    host = (parts.hostname or "").strip().rstrip(".").lower()
+    allowed = host_cache.get(host)
+    if allowed is None:
+        try:
+            validate_public_http_url(url)  # full check incl. DNS resolution
+        except UnsafeUrlError:
+            allowed = False
+        else:
+            allowed = True
+        if host:
+            # Only successes are cached; failures are re-evaluated each time
+            # so a transient DNS outage can't poison the boundary.
+            host_cache[host] = allowed
+    return allowed
 
 
 @dataclass(frozen=True)
@@ -81,16 +120,62 @@ class PlaywrightFetcher:
         if self._playwright is not None:
             await self._playwright.stop()
 
+    def _install_route_guard(self, context) -> None:
+        """Abort any requested URL that fails the public-URL trust boundary.
+
+        Chromium routes every request (documents, redirect hop destinations,
+        frames, subresources) through this handler, so a malicious site cannot
+        bounce the browser to file://, localhost, link-local or RFC1918 targets.
+
+        Known limitation (documented, accepted): a classic TOCTOU DNS-rebinding
+        race between our validation and Chromium's own connect cannot be fully
+        closed without proxying all browser traffic; this resolves the hostname
+        at request time and validates every returned address instead.
+        """
+        host_cache: dict[str, bool] = {}
+
+        async def _guard(route) -> None:
+            try:
+                ok = await asyncio.get_running_loop().run_in_executor(
+                    None, _route_request_allowed, route.request.url, host_cache
+                )
+            except Exception:
+                ok = False
+            try:
+                if ok:
+                    await route.continue_()
+                else:
+                    await route.abort()
+            except Exception:  # pragma: no cover - page/route already gone
+                pass
+
+        context.route("**/*", _guard)
+
     async def fetch(self, url: str) -> FetchResult:
         if self._browser is None:
             raise RuntimeError("PlaywrightFetcher must be used as an async context manager")
 
+        # Trust boundary before any navigation: unsafe URLs never reach Chromium.
+        try:
+            validated_url = validate_public_http_url(url)
+        except UnsafeUrlError as exc:
+            return FetchResult(
+                url=url,
+                final_url=None,
+                success=False,
+                status=None,
+                html=None,
+                text=None,
+                error=str(exc),
+            )
+
         context = await self._browser.new_context()
+        self._install_route_guard(context)
         page = await context.new_page()
 
         try:
             response = await page.goto(
-                url,
+                validated_url,
                 wait_until=self._wait_until,
                 timeout=self._timeout_ms,
             )
@@ -170,14 +255,29 @@ class PlaywrightFetcher:
         if self._browser is None:
             raise RuntimeError("PlaywrightFetcher must be used as an async context manager")
 
+        # Trust boundary before any navigation: unsafe URLs never reach Chromium.
+        try:
+            validated_url = validate_public_http_url(url)
+        except UnsafeUrlError as exc:
+            return ScreenshotResult(
+                url=url,
+                final_url=None,
+                width=width,
+                height=height,
+                full_page=False,
+                probe={},
+                error=str(exc),
+            )
+
         context = await self._browser.new_context(
             viewport={"width": width, "height": height},
             device_scale_factor=1,
         )
+        self._install_route_guard(context)
         page = await context.new_page()
 
         try:
-            response = await page.goto(url, wait_until="load", timeout=timeout_ms)
+            response = await page.goto(validated_url, wait_until="load", timeout=timeout_ms)
             final_url = page.url
 
             probe: dict = {}

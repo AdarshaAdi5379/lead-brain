@@ -870,6 +870,10 @@ def _audit_site_for_seed(seed: SeedRow, fetch, crawl: Optional[CrawlResult], *, 
 
 
 def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
+    # An unsafe seed URL was already rejected by the URL trust boundary at
+    # load time (seed.url_error); keep that reason visible instead of
+    # reporting a generic missing-URL error.
+    no_fetch_error = getattr(seed, "url_error", None) or "No website URL provided"
     extracted = validate_extracted_lead(
         {
             "url": None,
@@ -880,7 +884,7 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
             "complexity": "unknown",
             "load_speed": "unknown",
             "extraction_success": False,
-            "last_error": "No website URL provided",
+            "last_error": no_fetch_error,
         }
     ).to_dict()
 

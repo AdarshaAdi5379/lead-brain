@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import csv
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
+
+from src.net.url_guard import UnsafeUrlError, validate_public_http_url
+
+# A leading token urllib would interpret as a scheme (letters/digits/+/-/. but
+# must start with a letter) followed by ':'.
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 
 
 @dataclass(frozen=True)
@@ -32,6 +39,11 @@ class SeedRow:
     enrichment_confidence: Optional[float] = None
     enrichment_last_error: Optional[str] = None
     enrichment_last_checked_at: Optional[str] = None
+    # Set when a non-empty seed URL was rejected by the URL trust boundary
+    # (src/net/url_guard.py). The URL is kept out of every fetch path, but the
+    # reason is preserved so runs report "Invalid/unsafe website URL" instead
+    # of silently classifying the row as "no website".
+    url_error: Optional[str] = None
 
 
 _COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
@@ -71,13 +83,26 @@ def _clean_str(value: object) -> str:
     return str(value).strip()
 
 
-def _clean_url(value: str) -> Optional[str]:
-    url = _clean_str(value)
-    if not url:
-        return None
-    if "://" not in url:
-        url = f"https://{url}"
-    return url
+def _validated_seed_url(
+    value: str,
+) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(url, url_error)`` for a raw CSV cell.
+
+    A valid public http(s) URL passes through unchanged. An unsafe URL is
+    rejected *before it can reach Playwright* (SSRF boundary); the reason is
+    returned so reporting can distinguish it from a missing URL.
+    """
+    raw = _clean_str(value)
+    if not raw:
+        return None, None
+    # Only prepend the default scheme for bare domains: an explicit scheme is
+    # anything urllib would treat as one ("data:", "javascript:", "ftp:"...) —
+    # but ports on bare hosts ("example.com:8080") are NOT schemes.
+    candidate = raw if _SCHEME_RE.match(raw) else f"https://{raw}"
+    try:
+        return validate_public_http_url(candidate, resolve_dns=False), None
+    except UnsafeUrlError as exc:
+        return None, f"Invalid/unsafe website URL ({exc})"
 
 
 def load_seed_csv(csv_path: Path) -> list[SeedRow]:
@@ -110,7 +135,7 @@ def load_seed_csv(csv_path: Path) -> list[SeedRow]:
             category = _clean_str(_first_present(row, _COLUMN_ALIASES["category"]))
             city = _clean_str(_first_present(row, _COLUMN_ALIASES["city"]))
             state = _clean_str(_first_present(row, _COLUMN_ALIASES["state"]))
-            url = _clean_url(_first_present(row, _COLUMN_ALIASES["url"]))
+            url, url_error = _validated_seed_url(_first_present(row, _COLUMN_ALIASES["url"]))
 
             seeds.append(
                 SeedRow(
@@ -130,6 +155,7 @@ def load_seed_csv(csv_path: Path) -> list[SeedRow]:
                     postal_code=_clean_optional(row, _COLUMN_ALIASES["postal_code"]),
                     opening_hours=_clean_optional(row, _COLUMN_ALIASES["opening_hours"]),
                     source=_clean_optional(row, _COLUMN_ALIASES["source"]),
+                    url_error=url_error,
                 )
             )
 

@@ -23,6 +23,7 @@ from src.enrichment.match import email_domain_candidate, score_candidate
 from src.enrichment.report import EnrichmentReport
 from src.enrichment.search import SearchClient, build_search_query, search_web
 from src.enrichment.verifier import PageVerification, fetch_page
+from src.net.url_guard import UnsafeUrlError, validate_public_http_url
 
 
 def _now() -> str:
@@ -65,6 +66,13 @@ def _best_verified(
     """Fetch and score candidates; return the strongest verified one."""
     best: Optional[tuple[EnrichmentCandidate, float, dict[str, float]]] = None
     for candidate in candidates:
+        # SSRF boundary: unsafe candidates are never fetched or scored, so
+        # they can never be accepted or cached as a positive result — even
+        # when the transport is injected/mocked.
+        try:
+            validate_public_http_url(candidate.url, resolve_dns=False)
+        except UnsafeUrlError:
+            continue
         page = fetch(candidate.url)
         if not page.ok:
             continue

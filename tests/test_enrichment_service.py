@@ -279,5 +279,46 @@ class TestApplyEnrichmentToExisting(EnrichmentSqliteFixture):
         self.assertEqual(row[1], 0.85)
 
 
+class TestUnsafeCandidatesNeverCachedAsFound(EnrichmentSqliteFixture):
+    """Phase R1: SSRF-blocked candidates can never become positive results."""
+
+    def _run_with_candidates(self, urls: list[str]):
+        config = EnrichmentConfig(search_enabled=True, max_candidates=3)
+        search = _CountingSearch(urls)
+        # The fetcher would happily verify ANY candidate it is given; the
+        # trust boundary must reject unsafe candidates before this is reached.
+        enriched, report = run_enrichment(
+            self.connection,
+            [seed()],
+            config,
+            search_client=search,
+            fetcher=lambda url: matching_page(),
+        )
+        return enriched[0], report
+
+    def test_private_ip_candidates_never_found(self) -> None:
+        out, report = self._run_with_candidates(
+            ["http://169.254.169.254/", "http://192.168.1.10/"]
+        )
+        self.assertEqual(report.found, 0)
+        self.assertIsNone(out.url)
+        self.assertNotEqual(out.enrichment_status, "found")
+
+    def test_file_scheme_candidate_never_found(self) -> None:
+        out, report = self._run_with_candidates(["file:///etc/passwd"])
+        self.assertEqual(report.found, 0)
+        self.assertIsNone(out.url)
+        self.assertNotEqual(out.enrichment_status, "found")
+
+    def test_public_candidate_still_works_alongside_unsafe(self) -> None:
+        # Public candidates are unaffected by the boundary.
+        out, report = self._run_with_candidates(
+            ["https://radiantplumbing.com/"]
+        )
+        self.assertEqual(report.found, 1)
+        self.assertEqual(out.enrichment_status, "found")
+        self.assertEqual(out.url, "https://radiantplumbing.com/")
+
+
 if __name__ == "__main__":
     unittest.main()

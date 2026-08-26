@@ -8,7 +8,7 @@ Severity legend: CRITICAL (security compromise / major data corruption / fundame
 
 ## CRITICAL
 
-### CRIT-1 — Playwright-less runs destroy `website_url` for every lead
+### CRIT-1 — Playwright-less runs destroy `website_url` for every lead — ✅ FIXED (Phase R2)
 - **File:** `main.py`
 - **Function:** `_async_run` / `_process_seed_no_fetch`
 - **Line:** 462–468, 905
@@ -16,6 +16,7 @@ Severity legend: CRITICAL (security compromise / major data corruption / fundame
 - **Impact:** a full CSV run without Playwright stores every lead as website-less; the URL is unrecoverable from the DB. A later Playwright run creates a second row (different dedupe key) → duplicates. `--only-failed` cannot recover them (`WHERE website_url IS NOT NULL`). Enriched leads are hit twice.
 - **How to reproduce:** run `python main.py --input business_urls.sample.csv --limit 2` in an env without Playwright; inspect `leads.website_url` — both rows NULL.
 - **Recommended fix:** `_process_seed_no_fetch` must preserve `seed.url` when present (and set a truthful `last_error`).
+- **Fixed (R2):** `_process_seed_no_fetch` preserves `seed.url` in `LeadUpsert`/`ScoringInputs`; URL-bearing seeds get real URL-normalized identity (no synthetic biz:// key) with truthful `"Playwright unavailable; website not fetched"`. Genuinely website-less seeds keep the unchanged `biz://` fallback and "No website URL provided"; unsafe URLs keep their R1 `Invalid/unsafe website URL …` reason. Regression tests: `tests/test_website_identity.py` (CSV/OSM × URL/no-URL, dedupe across runs, derived-score association, export retention, `--only-failed` retry eligibility).
 
 ### CRIT-2 — Enrichment verifier fetches arbitrary URLs with no host validation (SSRF) — ✅ FIXED (Phase R1)
 - **File:** `src/enrichment/verifier.py`
@@ -37,9 +38,6 @@ Severity legend: CRITICAL (security compromise / major data corruption / fundame
 - **Recommended fix:** whitelist http/https schemes and reject loopback/private hosts in `_clean_url` **and** `PlaywrightFetcher.fetch`.
 - **Fixed:** shared trust boundary in `src/net/url_guard.py` (scheme whitelist, credential rejection, literal-IP + DNS resolution checks); seed loading rejects unsafe URLs with a truthful `Invalid/unsafe website URL …` reason (`SeedRow.url_error`, never "No website URL provided"); `PlaywrightFetcher.fetch()`/`.screenshot()` validate pre-goto AND route-intercept every request (redirects/frames/subresources) aborting non-public destinations. Known residual: TOCTOU DNS-rebinding window between validation and Chromium's connect (documented; would require proxy architecture). Regression tests: `tests/test_url_guard.py`, `tests/test_url_loader_validation.py::TestSeedUrlTrustBoundary`.
 
-### CRIT-1 — Playwright-less runs destroy `website_url` for every lead
-
----
 
 ## HIGH
 
@@ -117,13 +115,14 @@ Severity legend: CRITICAL (security compromise / major data corruption / fundame
 - **Impact:** a directory/competitor page ("Plumbing Services | Austin" containing ≥50% of "Austin Plumbing Co") or any page mentioning a single-token name can be accepted as the business's official website.
 - **Recommended fix:** require full-name sequence, exact normalized phone, or email-domain evidence for acceptance; gate single-token names.
 
-### H-10 — CSV export silently drops ALL derived columns for no-website leads (verified live)
+### H-10 — CSV export silently drops ALL derived columns for no-website leads (verified live) — ✅ FIXED (Phase R2)
 - **File:** `main.py`
 - **Function:** `_export_csv_for_run`
 - **Line:** 1210–1211, 1299–1300
 - **Root cause:** the export join key is `normalize_url_for_dedupe(record["website_url"])` — `""` for every no-website lead — which never matches a stored `biz://` key, so the tech/SEO/score/opportunity/visual merges are skipped.
 - **Impact:** E2E export: Phoenicia and Shipley rows have `final_score`, `priority_label`, `contactability_score`, `opportunity_count`, `visual_score`, `site_seo_score` all empty, even though `lead_scores` has 6 rows in the DB.
 - **Recommended fix:** key the merge map on the stored `website_url_normalized` (select it in the export query).
+- **Fixed (R2):** the export query selects `leads.website_url_normalized` and joins derived intelligence on the persisted key (`normalize_url_for_dedupe(website_url)` remains only as a legacy-row fallback), so biz://-keyed and URL-keyed rows both keep every derived column. Note: the separate legacy `+40`/recommendation overwrite belongs to H-2 and stays open. Test: `tests/test_website_identity.py::TestExportRetainsWebsiteAndDerivedColumns`.
 
 ### H-11 — SEO audit scores a well-formed real site 0/100 "Critical" (verified live)
 - **File:** `src/seo/site_audit.py`, `main.py`
@@ -257,11 +256,12 @@ Severity legend: CRITICAL (security compromise / major data corruption / fundame
 - **Impact:** the detector most relevant to no-phone/no-email/no-site leads never runs for them (verified: 0 rows for the no-website E2E lead).
 - **Fix:** allow contact-funnel detection for no-website leads (only skip website-dependent detectors).
 
-### M-19 — Engine outputs for no-website leads never persisted
+### M-19 — Engine outputs for no-website leads never persisted — ✅ FIXED (Phase R2, score persistence)
 - **File:** `main.py`
 - **Line:** 721–768
 - **Root cause:** `normalized = normalize_url_for_dedupe(seed.url) if seed.url else ""` → `get_lead_id_by_url("")` → None → persistence skipped.
 - **Fix:** resolve lead id by the actual dedupe key returned by `upsert_lead`.
+- **Fixed (R2):** with seed URLs preserved, the no-fetch path now resolves `lead_id` via upsert's returned key for BOTH identity kinds and persists the deterministic score. Remaining for R8: opportunity/funnel detection itself still does not run on the no-fetch path (M-18). Tests: `tests/test_website_identity.py::TestDerivedDataStaysAssociated`, `TestWebsiteIdentityPreservation`.
 
 ### M-20 — Costing preset bug: `gpt-4.1-mini`/`gpt-4.1-nano` priced as `gpt-4.1`
 - **File:** `src/costing.py`

@@ -870,13 +870,19 @@ def _audit_site_for_seed(seed: SeedRow, fetch, crawl: Optional[CrawlResult], *, 
 
 
 def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
-    # An unsafe seed URL was already rejected by the URL trust boundary at
-    # load time (seed.url_error); keep that reason visible instead of
-    # reporting a generic missing-URL error.
-    no_fetch_error = getattr(seed, "url_error", None) or "No website URL provided"
+    # Website identity is input data: preserve it even when nothing can be
+    # fetched. A crawl failure (or missing Playwright) must never demote a
+    # valid seed URL to "no website" — that would destroy dedupe identity,
+    # lose derived-intelligence joins and create duplicates on later runs.
+    if getattr(seed, "url_error", None):
+        no_fetch_error = seed.url_error or ""
+    elif seed.url:
+        no_fetch_error = "Playwright unavailable; website not fetched"
+    else:
+        no_fetch_error = "No website URL provided"
     extracted = validate_extracted_lead(
         {
-            "url": None,
+            "url": seed.url or None,
             "business_name": seed.business_name or None,
             "phone": seed.phone,
             "email": seed.email,
@@ -898,7 +904,9 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
             address=seed.address or None,
             source=seed.source or None,
             osm_id=seed.osm_id or None,
-            website_url=None,
+            # Preserve identity for scoring; fetch_ok stays False because no
+            # crawl ran (website existence ≠ crawl success).
+            website_url=seed.url or None,
             fetch_ok=False,
         )
     )
@@ -906,7 +914,7 @@ def _process_seed_no_fetch(connection, run_id: int, seed: SeedRow) -> None:
     contact = _build_contact_fields(seed, fetch=None, crawl=None, extracted=extracted)
 
     lead = LeadUpsert(
-        website_url=None,
+        website_url=seed.url or None,
         business_name=seed.business_name or None,
         phone=seed.phone,
         email=seed.email,
@@ -1175,7 +1183,7 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
     rows = connection.execute(
         """
         SELECT
-          business_name, phone, email, website_url,
+          business_name, phone, email, website_url, website_url_normalized,
           platform, complexity, load_speed,
           city, state, category,
           score, priority,
@@ -1299,9 +1307,16 @@ def _export_csv_for_run(connection, *, run_id: int, min_score: int) -> Path:
             record["pages_with_weak_cta_signal"] = ""
             record["pages_with_strong_brand_signal"] = ""
             record["pages_with_weak_hierarchy_signal"] = ""
-            # Match the lead by its normalized URL (as stored by upsert).
-            normalized = record.get("website_url") or ""
-            lead_id = lead_id_by_normalized.get(normalize_url_for_dedupe(normalized))
+            # Match the lead by its PERSISTED identity: the stored
+            # website_url_normalized covers both URL-keyed rows and synthetic
+            # biz:// rows; a derived normalization of website_url is only a
+            # fallback for legacy rows. Joining on normalize(website_url)
+            # alone strands every no-website lead's derived columns (H-10).
+            normalized = (
+                record.get("website_url_normalized")
+                or normalize_url_for_dedupe(record.get("website_url") or "")
+            )
+            lead_id = lead_id_by_normalized.get(normalized)
             if lead_id is not None:
                 for key, value in tech_by_lead.get(lead_id, {}).items():
                     record[key] = value

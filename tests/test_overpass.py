@@ -42,7 +42,7 @@ class TestOverpassQueryBuilder(unittest.TestCase):
             east=21.0,
             cap=50,
         )
-        self.assertIn('nwr["craft"="plumber"](10.0,20.0,11.0,21.0);', ql)
+        self.assertIn('nw["craft"="plumber"](10.0,20.0,11.0,21.0);', ql)
         self.assertIn("out center tags 50;", ql)
 
     def test_query_fallback_name_restricted_to_poi(self) -> None:
@@ -54,7 +54,7 @@ class TestOverpassQueryBuilder(unittest.TestCase):
             east=21.0,
             cap=20,
         )
-        self.assertIn('nwr["name"~"rare_unknown_business",i][~"^(amenity|shop|office|craft|healthcare|tourism|leisure|commercial)$"~"."](10.0,20.0,11.0,21.0);', ql)
+        self.assertIn('nw["name"~"rare_unknown_business",i][~"^(amenity|shop|office|craft|healthcare|tourism|leisure|commercial)$"~"."](10.0,20.0,11.0,21.0);', ql)
 
     def test_bbox_around_is_roughly_correct(self) -> None:
         s, w, n, e = _bbox_around(0.0, 0.0, 111_320)
@@ -150,6 +150,23 @@ class TestOpenStreetMapProvider(unittest.TestCase):
         # Prioritization puts Bob's Plumbing first because it has a website
         self.assertEqual(candidates[0].business_name, "Bob's Plumbing")
         self.assertEqual(candidates[1].business_name, "Ace Plumbing")
+
+    @patch("src.discovery.osm.geocode")
+    def test_search_overpass_failure_falls_back_to_nominatim(self, mock_geocode) -> None:
+        mock_geocode.return_value = _BBox((10.0, 20.0, 11.0, 21.0))
+        provider = OpenStreetMapProvider()
+        provider._cache = _NoCache()
+        # Mock _http.post_form to fail on all endpoints
+        provider._http.post_form = lambda url, data: (_ for _ in ()).throw(RuntimeError("connection refused"))
+        # Mock _search_nominatim to return candidates
+        from src.discovery.base import BusinessCandidate
+        provider._search_nominatim = lambda cat, loc, cap: [
+            BusinessCandidate(business_name="Fallback Interiors", category=cat, url="https://fallback.com", phone="123")
+        ]
+        candidates = provider.search(DiscoveryQuery(category="interiors", location="Bangalore"))
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].business_name, "Fallback Interiors")
+        self.assertEqual(candidates[0].url, "https://fallback.com")
 
 
 class _BBox:

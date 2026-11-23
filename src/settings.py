@@ -34,9 +34,9 @@ OVERPASS_FALLBACK_URLS: list[str] = [
     url.strip()
     for url in os.environ.get(
         "OVERPASS_FALLBACK_URLS",
+        "https://lz4.overpass-api.de/api/interpreter,"
         "https://overpass.kumi.systems/api/interpreter,"
-        "https://overpass.private.coffee/api/interpreter,"
-        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+        "https://overpass.private.coffee/api/interpreter",
     ).split(",")
     if url.strip()
 ]
@@ -73,13 +73,13 @@ OVERPASS_RADIUS: int = int(os.environ.get("OVERPASS_RADIUS", "10000"))
 
 # Politeness / resilience tunables (free public endpoints throttle heavily).
 OVERPASS_DELAY_SECONDS: float = float(os.environ.get("OVERPASS_DELAY_SECONDS", "1.0"))
-OVERPASS_MAX_RETRIES: int = int(os.environ.get("OVERPASS_MAX_RETRIES", "3"))
+OVERPASS_MAX_RETRIES: int = int(os.environ.get("OVERPASS_MAX_RETRIES", "1"))
 OVERPASS_RETRY_BACKOFF_SECONDS: float = float(
-    os.environ.get("OVERPASS_RETRY_BACKOFF_SECONDS", "2.0")
+    os.environ.get("OVERPASS_RETRY_BACKOFF_SECONDS", "1.5")
 )
 NOMINATIM_DELAY_SECONDS: float = float(os.environ.get("NOMINATIM_DELAY_SECONDS", "1.0"))
-NOMINATIM_MAX_RETRIES: int = int(os.environ.get("NOMINATIM_MAX_RETRIES", "3"))
-HTTP_TIMEOUT_SECONDS: float = float(os.environ.get("HTTP_TIMEOUT_SECONDS", "30"))
+NOMINATIM_MAX_RETRIES: int = int(os.environ.get("NOMINATIM_MAX_RETRIES", "2"))
+HTTP_TIMEOUT_SECONDS: float = float(os.environ.get("HTTP_TIMEOUT_SECONDS", "15"))
 
 # Local disk cache for geocoding + discovery responses (data/ is gitignored).
 DISCOVERY_CACHE_DIR: Path = PROJECT_ROOT / os.environ.get("DISCOVERY_CACHE_DIR", "data/cache")

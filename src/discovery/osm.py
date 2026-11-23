@@ -146,14 +146,14 @@ def _build_overpass_query(
             # For fallback name searches, restrict to commercial/POI entities so
             # Overpass doesn't scan millions of non-POI nodes/ways (which times out).
             clauses.append(
-                f'nwr["{key}"~"{value}",i][~"^(amenity|shop|office|craft|healthcare|tourism|leisure|commercial)$"~"."]({bbox});'
+                f'nw["{key}"~"{value}",i][~"^(amenity|shop|office|craft|healthcare|tourism|leisure|commercial)$"~"."]({bbox});'
             )
         else:
-            clauses.append(f'nwr["{key}"="{value}"]({bbox});')
+            clauses.append(f'nw["{key}"="{value}"]({bbox});')
 
     union = "(" + "".join(clauses) + ");"
     cap = max(1, int(cap))
-    return f"[out:json][timeout:45];{union}out center tags {cap};"
+    return f"[out:json][timeout:20];{union}out center tags {cap};"
 
 
 def _bbox_around(lat: float, lon: float, radius_m: float) -> tuple[float, float, float, float]:
@@ -306,10 +306,18 @@ class OpenStreetMapProvider(DiscoveryProvider):
                     last_exc = exc
                     logger.warning("Overpass endpoint %s failed: %s", endpoint, exc)
             if data is None:
+                logger.info(
+                    "Overpass endpoints unavailable (%s); falling back to Nominatim POI search for %r in %r",
+                    last_exc,
+                    category,
+                    location,
+                )
+                candidates = self._search_nominatim(category, location, cap=sample_cap)
+                if candidates:
+                    return candidates[:cap]
                 raise ProviderError(
-                    f"Overpass request failed on all {len(endpoints)} endpoint(s). "
-                    f"Check your network or set OVERPASS_API_URL / "
-                    f"OVERPASS_FALLBACK_URLS. Detail: {last_exc}"
+                    f"Overpass request failed on all {len(endpoints)} endpoint(s) and Nominatim fallback had no results. "
+                    f"Detail: {last_exc}"
                 ) from last_exc
             elements = data.get("elements", []) if isinstance(data, dict) else []
             self._cache.set(cache_key_value, elements)
@@ -319,6 +327,10 @@ class OpenStreetMapProvider(DiscoveryProvider):
             candidate = _element_to_candidate(element, category)
             if candidate is not None:
                 candidates.append(candidate)
+
+        # Fallback to Nominatim if Overpass returned zero candidates
+        if not candidates:
+            candidates = self._search_nominatim(category, location, cap=sample_cap)
 
         # Prioritize candidates: website present > phone/email present > address present
         def _candidate_rank(c: BusinessCandidate) -> tuple[int, int, int]:
@@ -336,6 +348,112 @@ class OpenStreetMapProvider(DiscoveryProvider):
         pool = actionable_candidates if actionable_candidates else candidates
         pool.sort(key=_candidate_rank, reverse=True)
         return pool[:cap]
+
+    def _search_nominatim(
+        self, category: str, location: str, cap: int
+    ) -> list[BusinessCandidate]:
+        """Fallback POI search using Nominatim when Overpass is overloaded or returns empty."""
+        import json
+        import urllib.parse
+        import urllib.request
+        from src.settings import NOMINATIM_URL, OSM_USER_AGENT
+
+        cache_key_val = cache_key("nominatim_poi", category, location, cap)
+        cached = self._cache.get(cache_key_val)
+        if cached is not None and isinstance(cached, list):
+            items = cached
+        else:
+            q = f"{category} in {location}"
+            params = {
+                "q": q,
+                "format": "jsonv2",
+                "limit": min(max(cap * 2, 20), 50),
+                "addressdetails": 1,
+                "extratags": 1,
+            }
+            url = f"{NOMINATIM_URL}?{urllib.parse.urlencode(params)}"
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": OSM_USER_AGENT, "Accept": "application/json"},
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=12) as resp:
+                    items = json.loads(resp.read().decode("utf-8"))
+                if isinstance(items, list):
+                    self._cache.set(cache_key_val, items)
+                else:
+                    items = []
+            except Exception as exc:
+                logger.warning("Nominatim POI search fallback failed: %s", exc)
+                return []
+
+        candidates: list[BusinessCandidate] = []
+        for item in items:
+            name = item.get("name")
+            if not name:
+                display = item.get("display_name", "")
+                name = display.split(",")[0].strip() if display else ""
+            if not name or len(name) < 2:
+                continue
+
+            extratags = item.get("extratags") or {}
+            address = item.get("address") or {}
+
+            url = _canonical_url(
+                extratags.get("website")
+                or extratags.get("contact:website")
+                or extratags.get("contact:web")
+                or extratags.get("url")
+            )
+            phone = (
+                extratags.get("phone")
+                or extratags.get("contact:phone")
+                or extratags.get("tel")
+            )
+            email = extratags.get("email") or extratags.get("contact:email")
+            city = (
+                address.get("city")
+                or address.get("town")
+                or address.get("suburb")
+                or address.get("city_district")
+            )
+            state = address.get("state")
+            postcode = address.get("postcode")
+            country = address.get("country")
+            formatted_address = item.get("display_name")
+
+            lat = float(item["lat"]) if "lat" in item else None
+            lon = float(item["lon"]) if "lon" in item else None
+
+            candidates.append(
+                BusinessCandidate(
+                    business_name=name,
+                    category=category,
+                    url=url,
+                    phone=phone,
+                    email=email,
+                    city=city,
+                    state=state,
+                    postal_code=postcode,
+                    country=country,
+                    address=formatted_address,
+                    latitude=lat,
+                    longitude=lon,
+                    osm_id=str(item.get("osm_id") or ""),
+                    osm_type=str(item.get("osm_type") or ""),
+                    source="openstreetmap",
+                    raw=item,
+                )
+            )
+
+        def _candidate_rank(c: BusinessCandidate) -> tuple[int, int, int]:
+            has_url = 1 if c.url else 0
+            has_contact = 1 if (c.phone or c.email) else 0
+            has_address = 1 if c.address else 0
+            return (has_url, has_contact, has_address)
+
+        candidates.sort(key=_candidate_rank, reverse=True)
+        return candidates[:cap]
 
 
 def smoke_run(category: str, location: str, limit: int = 10) -> None:

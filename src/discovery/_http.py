@@ -9,6 +9,7 @@ import urllib.request
 from typing import Any, Dict, Optional
 
 from src.settings import (
+    HTTP_TIMEOUT_SECONDS,
     NOMINATIM_DELAY_SECONDS,
     NOMINATIM_MAX_RETRIES,
     OSM_USER_AGENT,
@@ -54,7 +55,7 @@ class HttpBackoff:
             self._throttle()
             try:
                 request = urllib.request.Request(url, data=body, headers=_headers())
-                with urllib.request.urlopen(request, timeout=30) as response:
+                with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
                     raw = response.read().decode("utf-8", errors="replace")
                 self._last_request = time.monotonic()
                 return json.loads(raw)

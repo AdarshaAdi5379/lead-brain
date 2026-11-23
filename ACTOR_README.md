@@ -63,6 +63,31 @@ A `SUMMARY` key-value record reports how many businesses were scanned and qualif
 Pay per result — you pay only for the leads you get. Every run returns ranked, contactable
 prospects, so a single qualified lead typically pays for many runs.
 
+## AI Agents & MCP Integration
+
+You can integrate this Actor directly into your AI workflows (Claude Desktop, Cursor, Windsurf, or custom AI agents) via the official Apify Model Context Protocol (MCP) server.
+
+Add the following to your `claude_desktop_config.json` or Cursor MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "local-lead-finder": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://mcp.apify.com/?tools=adarsha5389/local-lead-finder",
+        "--header",
+        "Authorization: Bearer <YOUR_APIFY_API_TOKEN>"
+      ]
+    }
+  }
+}
+```
+
+Once configured, you can prompt your AI assistant directly:
+> *"Find 10 interior designers in Austin who need a website rebuild, extract their emails and phones, and prepare a personalized pitch for each."*
+
 ## Notes
 - No LLM or paid API keys required — fully deterministic and fast.
 - Discovery uses OpenStreetMap (free). For guaranteed, reproducible runs, pass an explicit `urls` list.

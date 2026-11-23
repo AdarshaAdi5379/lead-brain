@@ -187,8 +187,40 @@ now tracked in the repo and is the live source of truth for remaining work.
 - Invariant enforced at the storage boundary (protects every `upsert_lead` caller), not in main.py. Fixes H-5. New `tests/test_upsert_preservation.py` (NULL/empty/whitespace preservation, new-data writes, valid→valid, OSM→crawl, crawl enrichment, zero coordinates, pipeline + export + `leads_intelligence` integration). Full suite: 952 tests.
 
 ### Test count
-- Currently 98 test files; `python -m unittest discover -s tests` reports **952 tests** (951 pass on any checkout; the single env-dependent `CrmDashboardDataPathTest.test_records_from_editor_df` failure reproduces only when a local `data/lead_crm.xlsx` exists — it reads the real workbook, passes on a fresh checkout).
+- Currently 98 test files; `python -m unittest discover -s tests` reports **960 tests** (959 pass on any checkout; the single env-dependent `CrmDashboardDataPathTest.test_records_from_editor_df` failure reproduces only when a local `data/lead_crm.xlsx` exists — it reads the real workbook, passes on a fresh checkout).
 
-Remaining nice-to-haves (Phase 10)
-- Discovery UX: choose city/category in the dashboard and run it from the UI.
-- Harder on OSM results — filter out closed/permanently-closed and low-signal businesses before scrape.
+## Phase 20 — Apify Cloud Actor, MCP Integration & Monetization (completed, 2026-11-23)
+
+### 1. Cloud Actor Architecture & Packaging
+- Packaged full lead pipeline into an official Apify Actor:
+  - `Dockerfile` using `apify/actor-python-playwright:3.12` base image.
+  - `.actor/actor.json` & `.actor/INPUT_SCHEMA.json`: Category, location, maxResults, maxPagesPerSite, minScore, includeNoWebsite, urls.
+  - `.actor/output_schema.json`: Complete dataset item schema with lead scores, dimension scores, visual audits, SEO audits, tech detections, and opportunities.
+  - Entry point: `src/apify_entry.py` (streaming results via `Actor.push_data`, summary key-value store, error resilience).
+  - Actor ID: `PpQG2A0TxKMbiN9ub` (`adarsha5389/local-lead-finder`), builds deployed up to `0.1.13` (tagged `latest`).
+
+### 2. Actionable Lead Filtering & Ghost Pin Elimination
+- Discovered and eliminated OpenStreetMap "ghost pins" (geometry nodes with no website, phone, email, or address) that were causing `null` output rows:
+  - Filter: `src/discovery/osm.py` discards nodes lacking all 4 contact channels.
+  - Candidate ranking: `URL present > Direct contact (phone/email) present > Physical address present`.
+  - Expanded `CATEGORY_TAGS` across 35+ professional categories (interiors, furniture, architect, accountant, lawyer, contractor, cleaner, etc.).
+  - Fallback name query optimization: Restricted to commercial POI tags (`amenity|shop|office|craft|healthcare|tourism|leisure|commercial`) to prevent full-bbox unindexed scans that caused Overpass 502 Bad Gateway and timeouts.
+
+### 3. Broken-Site Recovery & New Website Build Opportunities
+- Broken-site recovery: If a website is unreachable or DNS fails (`ERR_NAME_NOT_RESOLVED`), the Actor captures it as a Critical priority lead:
+  - `top_opportunity: "Website Recovery & Redesign"` (Score 95, Critical).
+  - Evidence: `Website is currently unreachable or broken: <error>`.
+  - Recommended services: `"Website Troubleshooting & Recovery"`, `"Modern Website Rebuild"`, `"Hosting Migration & SSL Setup"`.
+- Site-less lead opportunities: Businesses without websites receive `top_opportunity: "New Website Build"` (Score 85, High) and starter website packages.
+
+### 4. Visual Website Audit & Playwright Resilience
+- Integrated local visual website audit heuristics into the Actor output (`visual_score`, `visual_health`, `visual_summary`, `visual_issues`).
+- `PlaywrightFetcher` resilience: Added partial content and viewport screenshot salvage on `networkidle`/`load` timeouts so sites with continuous streaming analytics are no longer discarded as errors.
+
+### 5. GitHub Synchronization & MCP Integration
+- Pushed complete source to GitHub: [https://github.com/AdarshaAdi5379/lead-brain](https://github.com/AdarshaAdi5379/lead-brain) (Public repository).
+- Added `smithery.yaml` for 1-click MCP installs.
+- Updated `ACTOR_README.md` with Claude Desktop, Cursor, and CLI integration instructions.
+- Connected and verified live MCP server in Claude Code CLI:
+  `claude mcp add --transport http apify "https://mcp.apify.com/?tools=adarsha5389/local-lead-finder"` $\rightarrow$ `✓ Connected`.
+- Public registry submissions: Submitted to Glama.ai, configured submission for mcpservers.org (`io.github.adarshaadi5379/local-lead-finder`), and documented Apify Store Pay-per-Event monetization roadmap.

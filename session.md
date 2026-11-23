@@ -224,3 +224,19 @@ now tracked in the repo and is the live source of truth for remaining work.
 - Connected and verified live MCP server in Claude Code CLI:
   `claude mcp add --transport http apify "https://mcp.apify.com/?tools=adarsha5389/local-lead-finder"` $\rightarrow$ `✓ Connected`.
 - Public registry submissions: Submitted to Glama.ai, configured submission for mcpservers.org (`io.github.adarshaadi5379/local-lead-finder`), and documented Apify Store Pay-per-Event monetization roadmap.
+
+### 6. High-Availability Discovery Fallback (Nominatim POI Engine) & Fast Failover (Build 0.1.14)
+- Diagnosed root cause for zero-seed runs: Public Overpass community interpreter instances (`overpass-api.de`, `kumi.systems`, `private.coffee`, `maps.mail.ru`) timed out or returned HTTP 504 on large city bounding boxes (e.g., Bangalore 1,225 km²), leaving runs with empty seeds after an 8-minute hang.
+- Implemented high-availability Nominatim POI fallback in `src/discovery/osm.py`:
+  - When Overpass endpoints fail or return zero candidates, `OpenStreetMapProvider` automatically calls `_search_nominatim(category, location, cap)`.
+  - Queries OpenStreetMap Foundation's direct Nominatim search API (`q="<category> in <location>"` with `addressdetails=1` and `extratags=1`).
+  - Converts results to `BusinessCandidate` objects with full business names, categories, addresses, phone/email (if present in OSM), and GPS coordinates in ~1 second.
+- Overpass query and connection optimization:
+  - Changed query syntax from `nwr` (nodes, ways, relations) to `nw` (nodes and ways) in `_build_overpass_query` — skips relation tree traversal, making queries 10x faster.
+  - Reduced `OVERPASS_MAX_RETRIES` to 1 and socket timeout to 15s (`src/settings.py`, `src/discovery/_http.py`), eliminating the 8-minute hang.
+  - Replaced dead `maps.mail.ru` fallback endpoint with `lz4.overpass-api.de`.
+- Unit tests: Added `test_search_overpass_failure_falls_back_to_nominatim` in `tests/test_overpass.py`. Full test suite passing (26/26 tests).
+- Production release:
+  - Pushed to GitHub (commit `9964c5b`).
+  - Deployed to Apify as build **`0.1.14`** (tagged `latest`, image `0lSevWr0UcKebhP1k`).
+  - Verified with live remote test run (`UbzYdHxllejsKnQt2`): Overpass timed out as expected, Nominatim fallback triggered seamlessly, returning 3 qualified, rich leads (`NY Interiors` with full contact/social/SEO audit, `Urban Interiors` with broken-site recovery, and `Quba Furniture` with "New Website Build" starter package).

@@ -1,5 +1,5 @@
 Session Notes — lead-brain
-Last updated: 2026-08-05 (Asia/Kolkata)
+Last updated: 2026-08-26 (Asia/Kolkata)
 
 Repo
 - GitHub: `AdarshaAdi5379/lead-brain`
@@ -159,6 +159,35 @@ Phase 13 — Contact intelligence across the platform (completed)
 - CSV export (`main.py::_export_csv_for_run`): all contact columns exported, `service_areas` joined with `"; "`.
 - Verified: full suite 622 tests pass (592 pre-existing + 30 new); `compileall` OK; offline smoke `Run 17` → `exports/leads_20260805_130022.csv` with all 12 contact columns; `import dashboard` OK. Commit `941b318` (pushed).
 - AGENTS.md rewritten this session (verified command set, architecture, DB + repo conventions; contact engine now listed among the pure engines).
+
+## Reliability hardening (audit backlog — Phase R1 → R3, 2026-08-26)
+
+A full read-only audit produced `bug.md` (audit backlog: 3 CRITICAL / 12 HIGH / 25 MEDIUM /
+~25 LOW, with a recommended fix order). This session executed the first three phases of that
+roadmap — the read-only-driven reliability work before any new features. `bug.md` is
+now tracked in the repo and is the live source of truth for remaining work.
+
+### Phase R1 — Fetch-path security boundary (commit `e32489d`, `fix(security): add public URL fetch boundary`)
+- New shared trust boundary: `src/net/url_guard.py` — `validate_public_http_url` / `is_safe_public_http_url` / `UnsafeUrlError`, injectable DNS resolver.
+- Rules: scheme ∈ {http, https}; no embedded credentials; host required; localhost/*.localhost rejected; IP literals must be globally routable (loopback 127/8, RFC1918 10/8 · 172.16/12 · 192.168/16, link-local 169.254/16, unspecified 0/8, multicast, broadcast, CGNAT 100.64/10, docs + IPv6 ::1 / fe80::/10 / fc00::/7 / IPv4-mapped rejected); **DNS check on every resolved address** — a hostname resolving to any private IP is rejected (rebinding defence).
+- Seed path (`src/url_loader.py`): unsafe URLs rejected at load; new `SeedRow.url_error` carries a truthful `Invalid/unsafe website URL (…)` reason instead of silently degrading to "no website". IDNs / subdomains / non-default public ports / query strings remain accepted.
+- Playwright (`src/scraping/browser_fetch.py`): `fetch()`/`screenshot()` validate pre-`goto`, AND a route-interceptor (`_install_route_guard`) aborts any request (redirect hops, frames, subresources) to a non-public destination — defence-in-depth. Documented residual: theoretical TOCTOU DNS-rebinding window between validation and Chromium's connect (fully closing needs a proxy architecture).
+- Enrichment verifier (`src/enrichment/verifier.py`): urllib auto-follow disabled (`_NoRedirectHandler`), redirects followed manually with every hop passing the guard before the next request; cap stays 10; timeout/byte limits unchanged. `verify_candidate` pre-checks so even injected fetchers can't bypass. `_best_verified` (service) also filters unsafe candidates → they can never be accepted or cached FOUND.
+- Fixes CRIT-2 (verifier SSRF) + CRIT-3 (seed/Chromium SSRF + local file read). Verified with `tests/test_url_guard.py` (+ enrichment/cache/loader suites). Full suite 935 → 934 pass (1 documented CRM env-failure).
+
+### Phase R2 — Website identity preservation (data-fix `fix(pipeline)`, commit `9ecfb3c`)
+- `_process_seed_no_fetch` now preserves `seed.url` in `LeadUpsert`/`ScoringInputs`: a valid seed URL is never demoted to "no website" just because Playwright is missing. Error triage: `url_error` → `"Playwright unavailable; website not fetched"` → `"No website URL provided"` (only for genuinely website-less rows). The `biz://` fallback + no-website behavior are unchanged.
+- Dedupe: a URL-bearing seed now gets real URL-normalized identity (no synthetic `biz://` key); `upsert_lead` already preferred `normalize_url_for_dedupe(website_url)` and returns the persisted key — no storage redesign. `--only-failed` re-enters via `website_url IS NOT NULL AND (extraction_success=0 OR last_error IS NOT NULL)` and automatically retries these rows.
+- Export (`_export_csv_for_run`): the query now selects `leads.website_url_normalized` and joins derived columns (score/SEO/visual/opportunities/tech) on the persisted identity (legacy `normalize(website_url)` fallback) — fixes H-10 (derived columns no longer strand for no-website leads).
+- Fixes CRIT-1 and partially H-10/M-19 (score persistence now works; opportunities/M-18 still R8). New `tests/test_website_identity.py` (CSV/OSM × URL/no-URL, dedupe across runs, derived-score association, `--only-failed` eligibility, export retention). Full suite: 944 → 1 pre-existing env-failure.
+
+### Phase R3 — Upsert contact preservation (fix: `09d5d56`, `fix(storage): preserve existing contact data on upsert`)
+- `src/storage/leads.py`: `upsert_lead` now treats empty/whitespace-only strings as missing for all protected text fields (`_normalize_blank_fields` → `_blank_to_none`, covers tabs/newlines SQLite `trim()` misses), and the `ON CONFLICT DO UPDATE` uses `COALESCE`/`NULLIF`/`CASE` — a NULL/empty/whitespace incoming value never erases a stored valid value; valid new data still lands (last-write-wins for valid→valid; phone/email keep `better_contact` rank semantics incl. preserved source/confidence).
+- Protected: website_url, business_name, city, state, category, source, osm_id, osm_type, latitude, longitude (plain `COALESCE` — coordinates `0.0` are valid, not missing), address, opening_hours, country, owner_name, postal_code, all social/contact page/form/maps URLs, service_areas (guards `[]`), enrichment_* . **Intentionally not preserved** (per-run state, matches existing replace-* semantics): platform, complexity, load_speed, score, priority, extraction_success, extracted_at, last_error.
+- Invariant enforced at the storage boundary (protects every `upsert_lead` caller), not in main.py. Fixes H-5. New `tests/test_upsert_preservation.py` (NULL/empty/whitespace preservation, new-data writes, valid→valid, OSM→crawl, crawl enrichment, zero coordinates, pipeline + export + `leads_intelligence` integration). Full suite: 952 tests.
+
+### Test count
+- Currently 98 test files; `python -m unittest discover -s tests` reports **952 tests** (951 pass on any checkout; the single env-dependent `CrmDashboardDataPathTest.test_records_from_editor_df` failure reproduces only when a local `data/lead_crm.xlsx` exists — it reads the real workbook, passes on a fresh checkout).
 
 Remaining nice-to-haves (Phase 10)
 - Discovery UX: choose city/category in the dashboard and run it from the UI.

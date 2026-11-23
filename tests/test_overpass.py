@@ -45,6 +45,17 @@ class TestOverpassQueryBuilder(unittest.TestCase):
         self.assertIn('nwr["craft"="plumber"](10.0,20.0,11.0,21.0);', ql)
         self.assertIn("out center tags 50;", ql)
 
+    def test_query_fallback_name_restricted_to_poi(self) -> None:
+        ql = _build_overpass_query(
+            category="rare_unknown_business",
+            south=10.0,
+            west=20.0,
+            north=11.0,
+            east=21.0,
+            cap=20,
+        )
+        self.assertIn('nwr["name"~"rare_unknown_business",i][~"^(amenity|shop|office|craft|healthcare|tourism|leisure|commercial)$"~"."](10.0,20.0,11.0,21.0);', ql)
+
     def test_bbox_around_is_roughly_correct(self) -> None:
         s, w, n, e = _bbox_around(0.0, 0.0, 111_320)
         self.assertAlmostEqual(s, -1.0, places=5)
@@ -136,7 +147,9 @@ class TestOpenStreetMapProvider(unittest.TestCase):
         )
         candidates = provider.search(DiscoveryQuery(category="plumber", location="Austin, TX"))
         self.assertEqual(len(candidates), 2)
-        self.assertEqual(candidates[0].business_name, "Ace Plumbing")
+        # Prioritization puts Bob's Plumbing first because it has a website
+        self.assertEqual(candidates[0].business_name, "Bob's Plumbing")
+        self.assertEqual(candidates[1].business_name, "Ace Plumbing")
 
 
 class _BBox:

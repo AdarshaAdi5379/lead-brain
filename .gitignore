@@ -5,6 +5,9 @@ __pycache__/
 .venv/
 venv/
 
+# Apify CLI local run storage (emulated dataset/KV).
+storage/
+
 .env
 
 # Private seed list (never commit; see AGENTS.md).

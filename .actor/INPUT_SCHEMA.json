@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "title": "Local Lead Finder input",
+  "type": "object",
+  "properties": {
+    "urls": {
+      "title": "Website URLs",
+      "type": "array",
+      "description": "Direct list of business websites to scan. When provided, discovery is skipped. Best for demos and known lists.",
+      "editor": "stringList",
+      "items": { "type": "string" }
+    },
+    "category": {
+      "title": "Category",
+      "type": "string",
+      "description": "Business category for discovery (e.g. plumber, salon, roofer). Used when 'urls' is empty.",
+      "editor": "textfield"
+    },
+    "location": {
+      "title": "Location",
+      "type": "string",
+      "description": "City / area for discovery (e.g. 'Austin, TX'). Used when 'urls' is empty.",
+      "editor": "textfield"
+    },
+    "maxResults": {
+      "title": "Max businesses",
+      "type": "integer",
+      "description": "Maximum number of businesses to scan.",
+      "default": 20,
+      "minimum": 1,
+      "maximum": 100
+    },
+    "maxPagesPerSite": {
+      "title": "Max pages per site",
+      "type": "integer",
+      "description": "Homepage plus up to this many internal pages (contact/about/services) per site.",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 5
+    },
+    "minScore": {
+      "title": "Minimum lead score",
+      "type": "integer",
+      "description": "Only push leads scoring at or above this (0-100).",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 100
+    },
+    "includeNoWebsite": {
+      "title": "Include businesses with no website",
+      "type": "boolean",
+      "description": "Include discovered businesses that have no website (evaluated for New Website Build opportunities). If disabled, only businesses with websites will be crawled and audited.",
+      "default": true
+    }
+  }
+}

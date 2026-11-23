@@ -1,0 +1,42 @@
+{
+  "actorSpecification": 1,
+  "name": "local-lead-finder",
+  "title": "Local Lead Finder — Website Opportunity Scanner",
+  "description": "Find local businesses that need a website (re)build. Crawls their sites, scores how badly they need a web developer, and returns a ranked list of prospects with contact details and a pitch angle for each.",
+  "version": "0.1",
+  "buildTag": "latest",
+  "dockerfile": "../Dockerfile",
+  "readme": "../ACTOR_README.md",
+  "input": "./INPUT_SCHEMA.json",
+  "output": "./output_schema.json",
+  "meta": {
+    "templateId": "python-start"
+  },
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1,
+      "views": {
+        "leads": {
+          "title": "Ranked local leads",
+          "transformation": {
+            "fields": [
+              "lead_score",
+              "priority",
+              "business_name",
+              "category",
+              "city",
+              "phone",
+              "email",
+              "website_url",
+              "top_opportunity",
+              "recommended_services"
+            ]
+          },
+          "display": {
+            "component": "table"
+          }
+        }
+      }
+    }
+  }
+}

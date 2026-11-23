@@ -30,6 +30,16 @@ OSM_USER_AGENT: str = os.environ.get(
     "OSM_USER_AGENT", "lead-brain/1.0 (local lead finder; contact: leadfinder@localhost)"
 )
 OVERPASS_API_URL: str = os.environ.get("OVERPASS_API_URL", "https://overpass-api.de/api/interpreter")
+OVERPASS_FALLBACK_URLS: list[str] = [
+    url.strip()
+    for url in os.environ.get(
+        "OVERPASS_FALLBACK_URLS",
+        "https://overpass.kumi.systems/api/interpreter,"
+        "https://overpass.private.coffee/api/interpreter,"
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    ).split(",")
+    if url.strip()
+]
 
 # Website enrichment (Phase 19). Free, local-first website recovery for leads
 # without a website URL: OSM tags + email-domain candidates + an anonymous

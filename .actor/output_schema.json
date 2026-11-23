@@ -1,0 +1,19 @@
+{
+  "actorOutputSchemaVersion": 1,
+  "title": "Local Lead Finder output",
+  "description": "Ranked local-business leads with a website-opportunity score, contact details and recommended services.",
+  "properties": {
+    "leads": {
+      "type": "string",
+      "title": "Ranked leads",
+      "description": "One row per business, sorted by how badly it needs a website (re)build, with contact details and a pitch angle.",
+      "template": "{{links.apiDefaultDatasetUrl}}/items?view=leads"
+    },
+    "summary": {
+      "type": "string",
+      "title": "Run summary",
+      "description": "Scanned and qualified counts, average score and priority breakdown for this run.",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/SUMMARY"
+    }
+  }
+}

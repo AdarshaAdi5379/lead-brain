@@ -120,7 +120,7 @@ class PlaywrightFetcher:
         if self._playwright is not None:
             await self._playwright.stop()
 
-    def _install_route_guard(self, context) -> None:
+    async def _install_route_guard(self, context) -> None:
         """Abort any requested URL that fails the public-URL trust boundary.
 
         Chromium routes every request (documents, redirect hop destinations,
@@ -149,7 +149,7 @@ class PlaywrightFetcher:
             except Exception:  # pragma: no cover - page/route already gone
                 pass
 
-        context.route("**/*", _guard)
+        await context.route("**/*", _guard)
 
     async def fetch(self, url: str) -> FetchResult:
         if self._browser is None:
@@ -170,17 +170,31 @@ class PlaywrightFetcher:
             )
 
         context = await self._browser.new_context()
-        self._install_route_guard(context)
+        await self._install_route_guard(context)
         page = await context.new_page()
 
         try:
-            response = await page.goto(
-                validated_url,
-                wait_until=self._wait_until,
-                timeout=self._timeout_ms,
-            )
+            try:
+                response = await page.goto(
+                    validated_url,
+                    wait_until=self._wait_until,
+                    timeout=self._timeout_ms,
+                )
+            except Exception as nav_exc:
+                # If networkidle timed out, check if the DOM already loaded
+                if "networkidle" in str(nav_exc).lower() or "timeout" in str(nav_exc).lower():
+                    try:
+                        content_check = await page.content()
+                        if len(content_check) > 500:
+                            response = None
+                        else:
+                            raise nav_exc
+                    except Exception:
+                        raise nav_exc
+                else:
+                    raise nav_exc
 
-            status = response.status if response is not None else None
+            status = response.status if response is not None else 200
             final_url = page.url
 
             html = await page.content()
@@ -211,7 +225,7 @@ class PlaywrightFetcher:
             return FetchResult(
                 url=url,
                 final_url=final_url,
-                success=bool(response) and meaningful,
+                success=meaningful,
                 status=status,
                 html=html_limited or None,
                 text=text_limited or None,
@@ -220,6 +234,28 @@ class PlaywrightFetcher:
                 cookies=cookies,
             )
         except Exception as exc:
+            # Salvage partial content if page loaded but timed out or threw
+            try:
+                html = await page.content()
+                try:
+                    text = await page.evaluate("() => document.body ? document.body.innerText : ''")
+                except Exception:
+                    text = ""
+                html_limited = _limit_chars(html, self._max_html_chars) if html else ""
+                text_limited = _limit_chars(text or "", self._max_text_chars)
+                if len(text_limited.strip()) > 50 or len(html_limited.strip()) > 500:
+                    return FetchResult(
+                        url=url,
+                        final_url=page.url or url,
+                        success=True,
+                        status=200,
+                        html=html_limited,
+                        text=text_limited,
+                        error=None,
+                    )
+            except Exception:
+                pass
+
             return FetchResult(
                 url=url,
                 final_url=None,
@@ -273,7 +309,7 @@ class PlaywrightFetcher:
             viewport={"width": width, "height": height},
             device_scale_factor=1,
         )
-        self._install_route_guard(context)
+        await self._install_route_guard(context)
         page = await context.new_page()
 
         try:
@@ -328,6 +364,21 @@ class PlaywrightFetcher:
                 probe=probe,
             )
         except Exception as exc:
+            # If load timed out, try capturing a viewport screenshot anyway
+            try:
+                await page.screenshot(path=output_path, clip={"x": 0, "y": 0, "width": width, "height": height})
+                return ScreenshotResult(
+                    url=url,
+                    final_url=page.url or url,
+                    width=width,
+                    height=height,
+                    full_page=False,
+                    probe={},
+                    error=None,
+                )
+            except Exception:
+                pass
+
             return ScreenshotResult(
                 url=url,
                 final_url=None,

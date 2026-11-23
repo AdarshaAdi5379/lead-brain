@@ -13,6 +13,7 @@ from src.settings import (
     DISCOVERY_CACHE_DIR,
     DISCOVERY_POI_CACHE_TTL_HOURS,
     OVERPASS_API_URL,
+    OVERPASS_FALLBACK_URLS,
     OVERPASS_DELAY_SECONDS,
     OVERPASS_MAX_RETRIES,
     OVERPASS_RADIUS,
@@ -61,6 +62,52 @@ CATEGORY_TAGS: dict[str, list[tuple[str, str]]] = {
     "flooring": [("craft", "floorer")],
     "window cleaning": [("craft", "window_cleaner")],
     "window_cleaner": [("craft", "window_cleaner")],
+    "interiors": [
+        ("office", "interior_design"),
+        ("shop", "interior_decorator"),
+        ("craft", "interior_decorator"),
+    ],
+    "interior": [
+        ("office", "interior_design"),
+        ("shop", "interior_decorator"),
+        ("craft", "interior_decorator"),
+    ],
+    "interior design": [
+        ("office", "interior_design"),
+        ("shop", "interior_decorator"),
+        ("craft", "interior_decorator"),
+    ],
+    "interior designer": [
+        ("office", "interior_design"),
+        ("shop", "interior_decorator"),
+        ("craft", "interior_decorator"),
+    ],
+    "interior decorator": [
+        ("office", "interior_design"),
+        ("shop", "interior_decorator"),
+        ("craft", "interior_decorator"),
+    ],
+    "furniture": [("shop", "furniture"), ("craft", "joiner")],
+    "architect": [("office", "architect")],
+    "architecture": [("office", "architect")],
+    "lawyer": [("office", "lawyer")],
+    "attorney": [("office", "lawyer")],
+    "legal": [("office", "lawyer")],
+    "accountant": [("office", "accountant"), ("office", "tax_advisor")],
+    "accounting": [("office", "accountant"), ("office", "tax_advisor")],
+    "tax": [("office", "tax_advisor")],
+    "photographer": [("shop", "photo"), ("craft", "photographer")],
+    "photography": [("shop", "photo"), ("craft", "photographer")],
+    "catering": [("craft", "caterer"), ("amenity", "restaurant")],
+    "caterer": [("craft", "caterer")],
+    "veterinarian": [("amenity", "veterinary")],
+    "vet": [("amenity", "veterinary")],
+    "pet groomer": [("shop", "pet_grooming")],
+    "pest control": [("craft", "pest_control")],
+    "real estate": [("office", "estate_agent")],
+    "realtor": [("office", "estate_agent")],
+    "cleaning": [("craft", "cleaner"), ("shop", "cleaning")],
+    "solar": [("shop", "solar"), ("craft", "electrician")],
 }
 
 
@@ -93,14 +140,16 @@ def _build_overpass_query(
     filters = overpass_tag_filters(category)
     bbox = f"{south},{west},{north},{east}"
     clauses: list[str] = []
-    tagged = [f for f in filters if f[0] != "name"]
 
-    if tagged:
-        for key, value in tagged:
+    for key, value in filters:
+        if key == "name":
+            # For fallback name searches, restrict to commercial/POI entities so
+            # Overpass doesn't scan millions of non-POI nodes/ways (which times out).
+            clauses.append(
+                f'nwr["{key}"~"{value}",i][~"^(amenity|shop|office|craft|healthcare|tourism|leisure|commercial)$"~"."]({bbox});'
+            )
+        else:
             clauses.append(f'nwr["{key}"="{value}"]({bbox});')
-    else:
-        for key, value in filters:
-            clauses.append(f'nwr["{key}"~"{value}",i]({bbox});')
 
     union = "(" + "".join(clauses) + ");"
     cap = max(1, int(cap))
@@ -226,6 +275,7 @@ class OpenStreetMapProvider(DiscoveryProvider):
 
         radius_m = int(radius or OVERPASS_RADIUS)
         cap = max(1, int(limit if limit is not None else 100))
+        sample_cap = min(max(cap * 3, 50), 200) if cap < 100 else cap
 
         if point.bbox is not None:
             south, west, north, east = point.bbox
@@ -238,20 +288,29 @@ class OpenStreetMapProvider(DiscoveryProvider):
             west=west,
             north=north,
             east=east,
-            cap=cap,
+            cap=sample_cap,
         )
 
-        cache_key_value = cache_key("poi", category, location, south, west, north, east, cap)
+        cache_key_value = cache_key("poi", category, location, south, west, north, east, sample_cap)
         elements = self._cache.get(cache_key_value)
         if elements is None:
             logger.info("Overpass query: category=%r location=%r", category, location)
-            try:
-                data = self._http.post_form(OVERPASS_API_URL, {"data": ql})
-            except Exception as exc:
+            endpoints = list(dict.fromkeys([OVERPASS_API_URL, *OVERPASS_FALLBACK_URLS]))
+            data: Optional[dict[str, Any]] = None
+            last_exc: Optional[BaseException] = None
+            for endpoint in endpoints:
+                try:
+                    data = self._http.post_form(endpoint, {"data": ql})
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning("Overpass endpoint %s failed: %s", endpoint, exc)
+            if data is None:
                 raise ProviderError(
-                    f"Overpass request failed. Check your network or set "
-                    f"OVERPASS_API_URL in .env. Detail: {exc}"
-                ) from exc
+                    f"Overpass request failed on all {len(endpoints)} endpoint(s). "
+                    f"Check your network or set OVERPASS_API_URL / "
+                    f"OVERPASS_FALLBACK_URLS. Detail: {last_exc}"
+                ) from last_exc
             elements = data.get("elements", []) if isinstance(data, dict) else []
             self._cache.set(cache_key_value, elements)
 
@@ -260,7 +319,23 @@ class OpenStreetMapProvider(DiscoveryProvider):
             candidate = _element_to_candidate(element, category)
             if candidate is not None:
                 candidates.append(candidate)
-        return candidates[:cap]
+
+        # Prioritize candidates: website present > phone/email present > address present
+        def _candidate_rank(c: BusinessCandidate) -> tuple[int, int, int]:
+            has_url = 1 if c.url else 0
+            has_contact = 1 if (c.phone or c.email) else 0
+            has_address = 1 if c.address else 0
+            return (has_url, has_contact, has_address)
+
+        # Filter out ghost map pins that have NO website AND NO phone AND NO email AND NO address.
+        # A lead with zero contact channels and no website cannot be audited, called, emailed, or pitched.
+        actionable_candidates = [
+            c for c in candidates
+            if bool(c.url or c.phone or c.email or c.address)
+        ]
+        pool = actionable_candidates if actionable_candidates else candidates
+        pool.sort(key=_candidate_rank, reverse=True)
+        return pool[:cap]
 
 
 def smoke_run(category: str, location: str, limit: int = 10) -> None:

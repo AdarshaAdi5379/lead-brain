@@ -42,13 +42,19 @@ async def main() -> None:
         max_pages = _int(actor_input.get("maxPagesPerSite"), 3, 1, 5)
         min_score = _int(actor_input.get("minScore"), 0, 0, 100)
         include_no_website = bool(actor_input.get("includeNoWebsite", True))
+        require_contact = bool(actor_input.get("requireContact", True))
 
         urls = [u.strip() for u in (actor_input.get("urls") or []) if u and str(u).strip()]
         category = (actor_input.get("category") or "").strip()
         location = (actor_input.get("location") or "").strip()
 
         seeds = _build_seeds(
-            urls, category, location, max_results, include_no_website=include_no_website
+            urls,
+            category,
+            location,
+            max_results,
+            include_no_website=include_no_website,
+            require_contact=require_contact,
         )
         if not seeds:
             Actor.log.warning(
@@ -61,11 +67,12 @@ async def main() -> None:
             return
 
         Actor.log.info(
-            "Processing %d seed(s) (max_pages=%d, min_score=%d, include_no_website=%s)",
+            "Processing %d seed(s) (max_pages=%d, min_score=%d, include_no_website=%s, require_contact=%s)",
             len(seeds),
             max_pages,
             min_score,
             include_no_website,
+            require_contact,
         )
 
         crawler = FocusedCrawler(max_pages=max_pages)
@@ -86,6 +93,13 @@ async def main() -> None:
                 if item is None:
                     continue
 
+                if require_contact and not _has_contact(item):
+                    Actor.log.info(
+                        "Skipping %s: no contact channels found and requireContact is enabled",
+                        item.get("business_name") or item.get("website_url"),
+                    )
+                    continue
+
                 score_total += int(item["lead_score"])
                 by_priority[item["priority"]] = by_priority.get(item["priority"], 0) + 1
 
@@ -99,9 +113,10 @@ async def main() -> None:
         summary = {
             "scanned": len(seeds),
             "qualified": pushed,
-            "avg_score": round(score_total / len(seeds), 1) if seeds else 0,
+            "avg_score": round(score_total / pushed, 1) if pushed else 0,
             "by_priority": by_priority,
             "input_mode": "urls" if urls else "discovery",
+            "require_contact": require_contact,
         }
         await Actor.set_value("SUMMARY", summary)
         Actor.log.info("Done. %s", summary)
@@ -114,6 +129,7 @@ def _build_seeds(
     max_results: int,
     *,
     include_no_website: bool = True,
+    require_contact: bool = True,
 ) -> list[SeedRow]:
     if urls:
         city = location.split(",")[0].strip() if location else ""
@@ -129,20 +145,26 @@ def _build_seeds(
             for url in urls[:max_results]
         ]
     if category and location:
-        # If the user disabled website-less leads, discover a wider pool to find
-        # enough candidates that have active websites to fulfill max_results.
+        # If the user disabled website-less leads or requires contact details, discover
+        # a wider pool to find enough qualified candidates to fulfill max_results.
         query_limit = (
-            max(max_results * 5, 50) if not include_no_website else max(max_results * 2, 20)
+            max(max_results * 5, 50)
+            if (not include_no_website or require_contact)
+            else max(max_results * 2, 20)
         )
         raw_seeds = discover_to_seeds(
             [DiscoveryQuery(category=category, location=location)],
             provider="osm",
             limit=query_limit,
         )
+        filtered = raw_seeds
+        if require_contact:
+            # Website-less leads will not be crawled, so they MUST have phone or email from discovery.
+            # Leads with website URLs will be crawled for contact info.
+            filtered = [s for s in filtered if bool(s.url or s.phone or s.email)]
         if not include_no_website:
-            filtered = [s for s in raw_seeds if s.url]
-            return filtered[:max_results]
-        return raw_seeds[:max_results]
+            filtered = [s for s in filtered if s.url]
+        return filtered[:max_results]
     return []
 
 
@@ -376,6 +398,39 @@ def _build_item(
             if count > 0:
                 visual_issues.append(signal_name)
 
+    phone_val = contact.phone or seed.phone or None
+    phone_source_val = contact.phone_source or (
+        "osm" if seed.phone and seed.osm_id else ("seed" if seed.phone else None)
+    )
+    email_val = contact.email or seed.email or None
+    email_source_val = contact.email_source or (
+        "osm" if seed.email and seed.osm_id else ("seed" if seed.email else None)
+    )
+
+    socials = {
+        "facebook": contact.facebook_url,
+        "instagram": contact.instagram_url,
+        "linkedin": contact.linkedin_url,
+        "twitter": contact.twitter_url,
+        "youtube": contact.youtube_url,
+        "whatsapp": contact.whatsapp_url,
+    }
+
+    contact_methods: list[str] = []
+    if phone_val:
+        contact_methods.append("phone")
+    if email_val:
+        contact_methods.append("email")
+    for net, net_url in socials.items():
+        if net_url:
+            contact_methods.append(net)
+    if contact.contact_form_url:
+        contact_methods.append("contact_form")
+    elif contact.contact_page_url:
+        contact_methods.append("contact_page")
+
+    has_contact = len(contact_methods) > 0
+
     return {
         "business_name": seed.business_name or None,
         "category": seed.category or None,
@@ -386,18 +441,15 @@ def _build_item(
         "postal_code": contact.postal_code or seed.postal_code or None,
         "website_url": seed.url or None,
         "has_website": bool(seed.url),
-        "phone": contact.phone or seed.phone or None,
-        "phone_source": contact.phone_source,
-        "email": contact.email or seed.email or None,
-        "email_source": contact.email_source,
-        "socials": {
-            "facebook": contact.facebook_url,
-            "instagram": contact.instagram_url,
-            "linkedin": contact.linkedin_url,
-            "twitter": contact.twitter_url,
-            "youtube": contact.youtube_url,
-            "whatsapp": contact.whatsapp_url,
-        },
+        "phone": phone_val,
+        "phone_source": phone_source_val,
+        "email": email_val,
+        "email_source": email_source_val,
+        "socials": socials,
+        "contact_page_url": contact.contact_page_url or None,
+        "contact_form_url": contact.contact_form_url or None,
+        "has_contact": has_contact,
+        "contact_methods": contact_methods,
         "opening_hours": contact.opening_hours or seed.opening_hours or None,
         "service_areas": list(contact.service_areas),
         "google_maps_url": maps_url,
@@ -516,6 +568,29 @@ def _crawl_summary(crawl: Optional[CrawlResult]) -> Optional[dict[str, Any]]:
             for page in crawl.pages
         ],
     }
+
+
+def _get_contact_methods(item: dict[str, Any]) -> list[str]:
+    methods: list[str] = []
+    if item.get("phone"):
+        methods.append("phone")
+    if item.get("email"):
+        methods.append("email")
+    socials = item.get("socials") or {}
+    for network, url in socials.items():
+        if url:
+            methods.append(network)
+    if item.get("contact_form_url"):
+        methods.append("contact_form")
+    elif item.get("contact_page_url"):
+        methods.append("contact_page")
+    return methods
+
+
+def _has_contact(item: dict[str, Any]) -> bool:
+    if item.get("has_contact") is not None:
+        return bool(item.get("has_contact"))
+    return len(_get_contact_methods(item)) > 0
 
 
 def _int(value: Any, default: int, minimum: int, maximum: int) -> int:

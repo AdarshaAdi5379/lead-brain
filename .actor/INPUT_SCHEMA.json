@@ -51,6 +51,12 @@
       "type": "boolean",
       "description": "Include discovered businesses that have no website (evaluated for New Website Build opportunities). If disabled, only businesses with websites will be crawled and audited.",
       "default": true
+    },
+    "requireContact": {
+      "title": "Require contact details",
+      "type": "boolean",
+      "description": "Only return leads that have at least one way of contacting them (phone, email, social profile, or website contact page). Automatically drops ghost/unreachable businesses that have no website and no contact info.",
+      "default": true
     }
   }
 }

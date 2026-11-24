@@ -29,7 +29,7 @@ to buy a website redesign, why, and how to reach them."*
 ## Input
 - `urls` — a list of business websites (skips discovery), **or**
 - `category` + `location` — e.g. `plumber` + `Austin, TX`
-- `maxResults`, `maxPagesPerSite`, `minScore`, `includeNoWebsite`
+- `maxResults`, `maxPagesPerSite`, `minScore`, `includeNoWebsite`, `requireContact`
 
 ## Output (dataset item, abridged)
 ```json
@@ -39,6 +39,8 @@ to buy a website redesign, why, and how to reach them."*
   "has_website": true,
   "phone": "+1-512-555-0100",
   "email": "hello@acmeplumbing.example",
+  "has_contact": true,
+  "contact_methods": ["phone", "email"],
   "city": "Austin",
   "state": "TX",
   "platform": "wordpress",

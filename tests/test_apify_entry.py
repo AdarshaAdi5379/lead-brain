@@ -7,6 +7,8 @@ from unittest.mock import patch
 from src.apify_entry import (
     _build_item,
     _build_seeds,
+    _get_contact_methods,
+    _has_contact,
     _visual_page_context,
 )
 from src.contact import ContactSignals
@@ -50,11 +52,29 @@ class TestApifyEntry(unittest.TestCase):
             SeedRow(business_name="Site B", category="plumber", url="", city="Austin", state="TX"),
         ]
         seeds = _build_seeds(
-            [], "plumber", "Austin, TX", max_results=10, include_no_website=True
+            [], "plumber", "Austin, TX", max_results=10, include_no_website=True, require_contact=False
         )
         self.assertEqual(len(seeds), 2)
         self.assertEqual(seeds[0].business_name, "Site A")
         self.assertEqual(seeds[1].business_name, "Site B")
+
+    @patch("src.apify_entry.discover_to_seeds")
+    def test_build_seeds_discovery_require_contact_filters_ghost_leads(self, mock_discover) -> None:
+        mock_discover.return_value = [
+            # Has website (kept for crawl)
+            SeedRow(business_name="Site A", category="plumber", url="https://sitea.com", city="Austin", state="TX"),
+            # No website, has phone (kept)
+            SeedRow(business_name="Site B", category="plumber", url="", phone="+1-512-555-0199", city="Austin", state="TX"),
+            # No website, has email (kept)
+            SeedRow(business_name="Site C", category="plumber", url="", email="info@sitec.com", city="Austin", state="TX"),
+            # No website, NO phone, NO email (ghost lead - dropped!)
+            SeedRow(business_name="Ghost Co", category="plumber", url="", city="Austin", state="TX"),
+        ]
+        seeds = _build_seeds(
+            [], "plumber", "Austin, TX", max_results=10, include_no_website=True, require_contact=True
+        )
+        self.assertEqual(len(seeds), 3)
+        self.assertEqual([s.business_name for s in seeds], ["Site A", "Site B", "Site C"])
 
     def test_build_item_with_full_audits(self) -> None:
         seed = SeedRow(
@@ -152,6 +172,9 @@ class TestApifyEntry(unittest.TestCase):
         self.assertEqual(item["top_opportunity"], "Website Redesign")
         self.assertEqual(item["opportunity_count"], 1)
         self.assertIn("Responsive Redesign", item["recommended_services"])
+        self.assertTrue(item["has_contact"])
+        self.assertIn("phone", item["contact_methods"])
+        self.assertIn("email", item["contact_methods"])
 
     def test_build_item_no_website_fallback_opportunities(self) -> None:
         seed = SeedRow(
@@ -244,6 +267,59 @@ class TestApifyEntry(unittest.TestCase):
         self.assertIn("https://example.com/about", ctx)
         self.assertEqual(ctx["https://example.com/about"]["word_count"], 450)
         self.assertEqual(ctx["https://example.com/about"]["image_count"], 8)
+
+
+    def test_has_contact_and_contact_methods(self) -> None:
+        self.assertTrue(_has_contact({"phone": "+1-512-555-0100"}))
+        self.assertIn("phone", _get_contact_methods({"phone": "+1-512-555-0100"}))
+
+        self.assertTrue(_has_contact({"email": "hello@example.com"}))
+        self.assertIn("email", _get_contact_methods({"email": "hello@example.com"}))
+
+        self.assertTrue(_has_contact({"socials": {"whatsapp": "https://wa.me/12345"}}))
+        self.assertIn("whatsapp", _get_contact_methods({"socials": {"whatsapp": "https://wa.me/12345"}}))
+
+        self.assertTrue(_has_contact({"contact_page_url": "https://example.com/contact"}))
+        self.assertIn("contact_page", _get_contact_methods({"contact_page_url": "https://example.com/contact"}))
+
+        self.assertTrue(_has_contact({"contact_form_url": "https://example.com/#form"}))
+        self.assertIn("contact_form", _get_contact_methods({"contact_form_url": "https://example.com/#form"}))
+
+        self.assertFalse(_has_contact({}))
+        self.assertEqual(_get_contact_methods({}), [])
+        self.assertFalse(_has_contact({"phone": None, "email": None, "socials": {}}))
+
+    def test_build_item_without_contact(self) -> None:
+        seed = SeedRow(
+            business_name="Ghost Business",
+            category="plumber",
+            url=None,
+            city="Austin",
+            state="TX",
+        )
+        lead_score = LeadScore(
+            final_score=60,
+            priority_label="Warm",
+            dimension_scores={},
+            dimension_reasons={},
+            top_positive_reasons=[],
+            top_negative_reasons=[],
+            recommended_outreach_angle="Pitch starter site.",
+        )
+        item = _build_item(
+            seed=seed,
+            lead_score=lead_score,
+            opportunity_report=None,
+            seo_audit=None,
+            visual_audit=None,
+            contact=ContactSignals(),
+            fingerprint=None,
+            platform=None,
+        )
+        self.assertFalse(item["has_contact"])
+        self.assertEqual(item["contact_methods"], [])
+        self.assertIsNone(item["phone"])
+        self.assertIsNone(item["email"])
 
 
 if __name__ == "__main__":

@@ -27,6 +27,8 @@
               "city",
               "phone",
               "email",
+              "has_contact",
+              "contact_methods",
               "website_url",
               "top_opportunity",
               "recommended_services"

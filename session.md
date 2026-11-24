@@ -1,5 +1,5 @@
 Session Notes — lead-brain
-Last updated: 2026-08-26 (Asia/Kolkata)
+Last updated: 2026-11-24 (Asia/Kolkata)
 
 Repo
 - GitHub: `AdarshaAdi5379/lead-brain`
@@ -240,3 +240,45 @@ now tracked in the repo and is the live source of truth for remaining work.
   - Pushed to GitHub (commit `9964c5b`).
   - Deployed to Apify as build **`0.1.14`** (tagged `latest`, image `0lSevWr0UcKebhP1k`).
   - Verified with live remote test run (`UbzYdHxllejsKnQt2`): Overpass timed out as expected, Nominatim fallback triggered seamlessly, returning 3 qualified, rich leads (`NY Interiors` with full contact/social/SEO audit, `Urban Interiors` with broken-site recovery, and `Quba Furniture` with "New Website Build" starter package).
+
+## Phase 21 — Actionable Contact Requirement & Ghost Lead Filtering (completed, 2026-11-24)
+
+### 1. Root Cause Analysis
+- Addressed issue where Apify Actor runs with `includeNoWebsite: true` produced qualified leads with high scores (85 / "New Website Build") that had NO contact methods (no phone, no email, no social profiles, and no website).
+- Cause: OpenStreetMap (OSM) contains map geometry pins with only physical coordinates and names, but no phone/email tags. While lacking a website is a major sales opportunity, leads without any communication channel are operationally unusable ("ghost leads") for remote outreach and telecalling.
+
+### 2. Actor Configuration & Schema Updates
+- Added `requireContact: true` input toggle to `.actor/INPUT_SCHEMA.json`:
+  - Default: `true` (guarantees every returned lead has at least one actionable way to reach them).
+  - Can be toggled to `false` if users specifically want raw physical map pins for in-person street visits.
+- Updated `.actor/actor.json`:
+  - Added `"has_contact"` and `"contact_methods"` to dataset transformation table view.
+- Updated `ACTOR_README.md` to document the new `requireContact` parameter and example output schema.
+
+### 3. Pre-Discovery Filtering & Candidate Expansion
+- Updated `src/apify_entry.py::_build_seeds`:
+  - If `requireContact` is enabled:
+    - Retains candidates with website URLs (to be crawled by Playwright for contact extraction).
+    - Website-less candidates are **only** kept if they already have an extracted `phone` or `email` from discovery (OSM tags).
+    - Discards uncontactable candidates with no website and no phone/email before crawling begins.
+  - Query limit scaling: `query_limit` scales to `max(max_results * 5, 50)` when `requireContact` is enabled to ensure the candidate pool is large enough to fill `max_results` with real, reachable prospects.
+
+### 4. Post-Audit Contact Verification & Attribution
+- Added `_has_contact()` and `_get_contact_methods()` in `src/apify_entry.py`:
+  - Checks for:
+    - Direct phone numbers (owner, reception, telecaller, customer care).
+    - Email addresses (`info@`, `contact@`, `sales@`, `support@`, owner).
+    - Social profile URLs (WhatsApp, Facebook, Instagram, LinkedIn, Twitter/X, YouTube).
+    - Website contact form or contact page URLs (`contact_form_url`, `contact_page_url`).
+  - Added `"has_contact"` (bool) and `"contact_methods"` (list[str]) to the item output payload.
+  - Fixed source attribution fallback so that seed phone and email retain `"osm"` or `"seed"` instead of `None`.
+  - In `main()`, if `requireContact` is active and `_has_contact(item)` is `False`, the lead is logged and skipped rather than pushed to the dataset.
+
+### 5. Automated Tests & Verification
+- Updated `tests/test_apify_entry.py`:
+  - `test_build_seeds_discovery_require_contact_filters_ghost_leads`: Verifies that website-less leads without phone/email are filtered out when `require_contact=True`, while those with phone/email or website are kept.
+  - `test_has_contact_and_contact_methods`: Verifies multi-channel detection (phone, email, WhatsApp, contact page, contact form, and empty payloads).
+  - `test_build_item_without_contact`: Verifies `has_contact=False` and empty `contact_methods` for completely uncontactable leads.
+  - Full test suite passing (10/10 in `test_apify_entry`, 50/50 in related discovery/scoring suites).
+- Commit: `6dabfb6` (`feat(actor): add requireContact filter to drop unreachable leads without contact details`).
+
